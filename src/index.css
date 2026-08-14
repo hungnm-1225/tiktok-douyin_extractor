@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #FFF9FB;
+    font-family: 'Quicksand', 'Nunito', sans-serif;
+    color: #4A4058;
+  }
+}
+
+@keyframes heartbeat {
+  0%, 100% {
+    transform: scale(1);
+  }
+  25% {
+    transform: scale(1.15);
+  }
+  40% {
+    transform: scale(0.98);
+  }
+  60% {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes flower-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-heartbeat {
+  animation: heartbeat 1.4s ease-in-out infinite;
+}
+
+.animate-flower-spin {
+  animation: flower-spin 6s linear infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.pastel-shadow {
+  box-shadow: 0 10px 30px -10px rgba(244, 180, 208, 0.35), 0 4px 12px -2px rgba(216, 180, 254, 0.2);
+}
+
+.pastel-shadow-sm {
+  box-shadow: 0 4px 15px -3px rgba(244, 180, 208, 0.25), 0 2px 6px -1px rgba(216, 180, 254, 0.15);
+}
+
+.pastel-shadow-hover:hover {
+  box-shadow: 0 14px 35px -8px rgba(244, 180, 208, 0.45), 0 6px 16px -2px rgba(216, 180, 254, 0.3);
+}
+
+/* Custom Soft Scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FFF0F5;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #F2C4DE;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #E8A8CC;
+}
+

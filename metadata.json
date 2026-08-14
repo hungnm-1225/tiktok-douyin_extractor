@@ -1,0 +1,6 @@
+{
+  "name": "TikTok & Douyin Script Extractor AI",
+  "description": "Công cụ tối giản bóc tách kịch bản từ video TikTok & Douyin (hỗ trợ video Tiếng Việt và Tiếng Trung song ngữ kèm phụ đề timestamp).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
