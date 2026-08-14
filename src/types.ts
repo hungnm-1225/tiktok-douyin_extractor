@@ -1,10 +1,12 @@
 export interface ScriptSegment {
-  id: string;
+  id?: string;
   timestamp: string; // e.g. "[00:00 - 00:05]"
   startSec: number;
   endSec: number;
   originalText: string;
   translatedText?: string;
+  vietnameseTranslation?: string;
+  speaker?: string;
 }
 
 export interface VideoMetadata {
@@ -23,19 +25,27 @@ export interface ExtractionResult {
   segments: ScriptSegment[];
   fullOriginalScript: string;
   fullTranslatedScript?: string;
+  fullVietnameseScript?: string;
+  summary?: string;
+  toneAndStyle?: string;
   sourceLanguage: 'vi' | 'zh' | 'en' | 'other' | string;
   sourceLanguageName: string; // e.g. "Tiếng Việt", "Tiếng Trung (Douyin)"
   isVietnamese: boolean;
-  cleanedUpTempFiles: boolean;
+  cleanedUpTempFiles?: boolean;
+  modelUsed?: string;
 }
 
 export interface SampleVideoItem {
   id: string;
   platform: 'tiktok' | 'douyin';
   title: string;
-  niche: string;
+  niche?: string;
+  category?: string;
+  author?: string;
+  duration?: number;
+  coverUrl?: string;
   description: string;
-  url: string;
-  badge: string;
+  url?: string;
+  badge?: string;
   sampleResult: Partial<ExtractionResult>;
 }
