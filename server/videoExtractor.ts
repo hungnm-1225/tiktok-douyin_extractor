@@ -134,23 +134,24 @@ async function downloadViaTikWmApi(cleanUrl: string, fileId: string, platform: '
       },
     });
 
-    if (!streamRes.ok || !streamRes.body) {
+    if (!streamRes.ok) {
       console.warn(`[TikWM API] Failed to download stream: ${streamRes.status}`);
       return null;
     }
 
-    const fileStream = fs.createWriteStream(targetFilePath);
-    // @ts-ignore
-    await pipeline(Readable.fromWeb(streamRes.body), fileStream);
+    if (!fs.existsSync(TEMP_DIR)) {
+      fs.mkdirSync(TEMP_DIR, { recursive: true });
+    }
 
-    const stats = fs.statSync(targetFilePath);
-    if (stats.size < 1000) {
-      console.warn(`[TikWM API] Downloaded file is too small (${stats.size} bytes), might be invalid.`);
-      cleanupLocalTempFile(targetFilePath);
+    const arrayBuffer = await streamRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length < 1000) {
+      console.warn(`[TikWM API] Downloaded file is too small (${buffer.length} bytes), might be invalid.`);
       return null;
     }
 
-    console.log(`[TikWM API] Successfully downloaded ${stats.size} bytes to ${targetFilePath}`);
+    fs.writeFileSync(targetFilePath, buffer);
+    console.log(`[TikWM API] Successfully downloaded ${buffer.length} bytes to ${targetFilePath}`);
     return {
       filePath: targetFilePath,
       mimeType,
@@ -220,17 +221,19 @@ async function downloadViaDouyinApi(cleanUrl: string, fileId: string): Promise<D
       },
     });
 
-    if (!mediaRes.ok || !mediaRes.body) return null;
+    if (!mediaRes.ok) return null;
 
-    const fileStream = fs.createWriteStream(targetFilePath);
-    // @ts-ignore
-    await pipeline(Readable.fromWeb(mediaRes.body), fileStream);
+    if (!fs.existsSync(TEMP_DIR)) {
+      fs.mkdirSync(TEMP_DIR, { recursive: true });
+    }
 
-    const stats = fs.statSync(targetFilePath);
-    if (stats.size < 1000) {
-      cleanupLocalTempFile(targetFilePath);
+    const arrayBuffer = await mediaRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length < 1000) {
       return null;
     }
+
+    fs.writeFileSync(targetFilePath, buffer);
 
     return {
       filePath: targetFilePath,
