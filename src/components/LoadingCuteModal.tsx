@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Heart, PencilLine, Search, Clapperboard, AudioLines, Trash2 } from 'lucide-react';
+import { Sparkles, Heart, PencilLine, Search, Clapperboard, AudioLines, Trash2, Flower2 } from 'lucide-react';
 
 interface LoadingCuteModalProps {
   isOpen: boolean;
