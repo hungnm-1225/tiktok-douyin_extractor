@@ -165,10 +165,32 @@ export default async function handler(req: any, res: any) {
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
 
-    const uploadRes = await ai.files.upload({
-      file: localTempPath,
-      mimeType: mimeType || 'audio/mp3',
-    } as any);
+    // Prepare mediaPart for Gemini generateContent
+    const fileStats = fs.statSync(localTempPath);
+    const fileSizeInMB = fileStats.size / (1024 * 1024);
+    let mediaPart: any;
+    let uploadedFileRef: any = null;
+
+    if (fileSizeInMB <= 20) {
+      mediaPart = {
+        inlineData: {
+          mimeType: mimeType || 'audio/mp3',
+          data: base64Clean,
+        },
+      };
+    } else {
+      uploadedFileRef = await ai.files.upload({
+        file: localTempPath,
+        mimeType: mimeType || 'audio/mp3',
+      } as any);
+
+      mediaPart = {
+        fileData: {
+          fileUri: uploadedFileRef.uri,
+          mimeType: uploadedFileRef.mimeType || mimeType || 'audio/mp3',
+        },
+      };
+    }
 
     let activeModel = CANDIDATE_MODELS[0];
     let geminiResponse: any = null;
@@ -179,7 +201,7 @@ export default async function handler(req: any, res: any) {
         const response = await ai.models.generateContent({
           model: modelName,
           contents: [
-            uploadRes,
+            mediaPart,
             {
               text: `Hãy bóc tách toàn bộ kịch bản và câu thoại từ file tải lên này theo định dạng JSON có cấu trúc. Tên file: "${fileName || 'Audio/Video Upload'}"`,
             },
@@ -203,8 +225,8 @@ export default async function handler(req: any, res: any) {
     }
 
     try {
-      if (uploadRes?.name) {
-        ai.files.delete({ name: uploadRes.name }).catch(() => {});
+      if (uploadedFileRef?.name) {
+        ai.files.delete({ name: uploadedFileRef.name }).catch(() => {});
       }
     } catch {}
 

@@ -333,11 +333,35 @@ export default async function handler(req: any, res: any) {
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
 
-    console.log(`[API /api/extract] Uploading file to Gemini File API (${media.mimeType})...`);
-    const uploadRes = await ai.files.upload({
-      file: localFilePath,
-      mimeType: media.mimeType,
-    } as any);
+    // Prepare mediaPart for Gemini generateContent
+    const fileStats = fs.statSync(localFilePath);
+    const fileSizeInMB = fileStats.size / (1024 * 1024);
+    let mediaPart: any;
+    let uploadedFileRef: any = null;
+
+    if (fileSizeInMB <= 20) {
+      console.log(`[API /api/extract] Using inlineData for ${fileSizeInMB.toFixed(2)} MB media...`);
+      const buffer = fs.readFileSync(localFilePath);
+      mediaPart = {
+        inlineData: {
+          mimeType: media.mimeType || 'audio/mp3',
+          data: buffer.toString('base64'),
+        },
+      };
+    } else {
+      console.log(`[API /api/extract] Uploading file to Gemini File API (${fileSizeInMB.toFixed(2)} MB)...`);
+      uploadedFileRef = await ai.files.upload({
+        file: localFilePath,
+        mimeType: media.mimeType,
+      } as any);
+
+      mediaPart = {
+        fileData: {
+          fileUri: uploadedFileRef.uri,
+          mimeType: uploadedFileRef.mimeType || media.mimeType,
+        },
+      };
+    }
 
     let activeModel = CANDIDATE_MODELS[0];
     let geminiResponse: any = null;
@@ -349,7 +373,7 @@ export default async function handler(req: any, res: any) {
         const response = await ai.models.generateContent({
           model: modelName,
           contents: [
-            uploadRes,
+            mediaPart,
             {
               text: `Hãy bóc tách toàn bộ lời thoại âm thanh từ file phương tiện này theo định dạng JSON có cấu trúc. Tiêu đề video: "${media.title}". Nền tảng: ${media.platform}.`,
             },
@@ -373,10 +397,10 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // Delete Gemini uploaded cloud file asynchronously
+    // Delete Gemini uploaded cloud file if any
     try {
-      if (uploadRes?.name) {
-        ai.files.delete({ name: uploadRes.name }).catch(() => {});
+      if (uploadedFileRef?.name) {
+        ai.files.delete({ name: uploadedFileRef.name }).catch(() => {});
       }
     } catch {}
 
