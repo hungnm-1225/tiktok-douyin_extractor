@@ -82,8 +82,8 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
       
       {/* Video Summary Header Card */}
       <div className="bg-white rounded-3xl p-6 sm:p-7 border border-pink-100/80 pastel-shadow space-y-5">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-pink-50">
-          <div className="space-y-2 flex-1">
+        <div className="pb-4 border-b border-pink-50">
+          <div className="space-y-2 flex-1 pb-4">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider border ${
                 result.videoMetadata.platform === 'douyin'
