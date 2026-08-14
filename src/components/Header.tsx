@@ -31,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
               </h1>
             </div>
             <p className="text-xs text-slate-500 font-medium hidden sm:block">
-              Bóc tách kịch bản Tiếng Việt & Song ngữ Tiếng Trung
+              Lấy script video - Hoàng Hồng Hạnh
             </p>
           </div>
         </div>
