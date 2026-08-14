@@ -132,7 +132,14 @@ export default function App() {
         }),
       });
 
-      const data = await res.json();
+      let data: any;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const textErr = await res.text();
+        throw new Error(textErr || `Lỗi phản hồi từ máy chủ (${res.status})`);
+      }
 
       if (!res.ok || !data.success) {
         let msg = data.error || 'Bóc tách video thất bại.';
@@ -191,7 +198,15 @@ export default function App() {
           }),
         });
 
-        const data = await res.json();
+        let data: any;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          data = await res.json();
+        } else {
+          const textErr = await res.text();
+          throw new Error(textErr || `Lỗi phản hồi từ máy chủ (${res.status})`);
+        }
+
         if (!res.ok || !data.success) {
           let msg = data.error || 'Lỗi bóc tách file media.';
           if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
