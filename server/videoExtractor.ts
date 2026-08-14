@@ -113,20 +113,21 @@ async function downloadViaTikWmApi(cleanUrl: string, fileId: string, platform: '
     const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
     const duration = videoData.duration || 30;
 
-    // Prefer audio stream for faster transcription and lower Gemini payload size
-    // Fall back to video stream if audio stream is missing
-    const mediaStreamUrl = videoData.music || videoData.play || videoData.wmplay;
+    // Always prioritize the full VIDEO stream (MP4) because TikTok/Douyin videos often have 
+    // AI text-to-speech voiceovers or custom voice dubbing mixed into the video track,
+    // while videoData.music only contains the raw background music track without the spoken dialogue.
+    const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.music;
     if (!mediaStreamUrl) {
       console.warn('[TikWM API] No stream URL found in payload.');
       return null;
     }
 
-    const isAudioOnly = Boolean(videoData.music);
-    const extension = isAudioOnly ? 'mp3' : 'mp4';
-    const mimeType = isAudioOnly ? 'audio/mp3' : 'video/mp4';
+    const isVideo = Boolean(videoData.play || videoData.wmplay || (!videoData.music && mediaStreamUrl));
+    const extension = isVideo ? 'mp4' : 'mp3';
+    const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
     const targetFilePath = path.join(TEMP_DIR, `${fileId}.${extension}`);
 
-    console.log(`[TikWM API] Downloading media stream (${extension})...`);
+    console.log(`[TikWM API] Downloading full video/media stream (${extension})...`);
     const streamRes = await fetch(mediaStreamUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -202,16 +203,16 @@ async function downloadViaDouyinApi(cleanUrl: string, fileId: string): Promise<D
     const author = item.author?.nickname || 'Douyin Creator';
     const duration = Math.round((item.duration || 30000) / 1000);
 
-    // Audio stream or video stream
-    const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
+    // Always prioritize the full video stream to capture AI voices, voiceovers and on-screen dialogue
     const videoUrl = item.video?.play_addr?.url_list?.[0]?.replace('playwm', 'play');
-    const targetUrl = audioUrl || videoUrl;
+    const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
+    const targetUrl = videoUrl || audioUrl;
 
     if (!targetUrl) return null;
 
-    const isAudio = Boolean(audioUrl);
-    const extension = isAudio ? 'mp3' : 'mp4';
-    const mimeType = isAudio ? 'audio/mp3' : 'video/mp4';
+    const isVideo = Boolean(videoUrl);
+    const extension = isVideo ? 'mp4' : 'mp3';
+    const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
     const targetFilePath = path.join(TEMP_DIR, `${fileId}.${extension}`);
 
     const mediaRes = await fetch(targetUrl, {

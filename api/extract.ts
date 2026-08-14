@@ -17,10 +17,11 @@ const CANDIDATE_MODELS = [
 const SYSTEM_INSTRUCTION = `Bạn là chuyên gia bóc tách kịch bản audio/video ngắn hàng đầu (TikTok & Douyin).
 Nhiệm vụ trọng tâm:
 1. Nghe và nhận diện chính xác ngôn ngữ của video (Tiếng Việt, Tiếng Trung, Tiếng Anh,...).
-2. Bóc tách nguyên văn 100% từng câu thoại trong video/audio thành văn bản (Script verbatim).
+2. Bóc tách nguyên văn 100% từng câu thoại trong video thành văn bản (Script verbatim):
+   - CHÚ Ý ĐẶC BIỆT: Video có thể chứa giọng lồng tiếng, giọng đọc nhân tạo AI (Text-to-Speech), lời dẫn thuyết minh, âm thanh hội thoại xen kẽ nhạc nền hoặc chữ phụ đề chạy trên màn hình. Bạn hãy lắng nghe kỹ tất cả các câu thoại/giọng đọc này và kết hợp quan sát phụ đề trên video để trích xuất đầy đủ, tuyệt đối không được bỏ sót bất kỳ câu nói hay lời thuyết minh nào.
    - Nếu là video Tiếng Việt: Bóc tách chính xác từng câu tiếng Việt kèm timestamp.
    - Nếu là video Tiếng Trung (hoặc tiếng nước ngoài): Bóc tách nguyên văn tiếng Trung gốc (chữ Hán), VÀ đồng thời dịch câu đó sang Tiếng Việt tự nhiên, chuẩn văn phong hội thoại / bắt trend mượt mà.
-   - Nếu là nhạc không lời hoặc chỉ có âm thanh nền: Tạo phân đoạn mô tả ngắn gọn giai điệu nhạc nền [mm:ss].
+   - Nếu là video hoàn toàn chỉ có nhạc không lời không có bất kỳ giọng nói nào: Tạo phân đoạn mô tả ngắn gọn giai điệu nhạc nền [mm:ss].
 3. Đánh dấu mốc thời gian (Timestamp) chính xác cho từng phân đoạn dạng [mm:ss - mm:ss], kèm thời gian giây bắt đầu (startSec) và kết thúc (endSec).
 4. Cung cấp toàn bộ kịch bản liền mạch (Full text).`;
 
@@ -122,7 +123,7 @@ async function downloadMedia(cleanUrl: string, fileId: string, platform: 'tiktok
     fs.mkdirSync(tempDir, { recursive: true });
   }
 
-  // Strategy 1: TikWM API
+  // Strategy 1: TikWM API (prioritize full MP4 video stream)
   try {
     const form = new URLSearchParams();
     form.append('url', cleanUrl);
@@ -149,12 +150,14 @@ async function downloadMedia(cleanUrl: string, fileId: string, platform: 'tiktok
         const title = videoData.title || (platform === 'douyin' ? 'Douyin Video' : 'TikTok Video');
         const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
         const duration = videoData.duration || 30;
-        const mediaStreamUrl = videoData.music || videoData.play || videoData.wmplay;
+        
+        // Prioritize full video MP4 (play / wmplay / hdplay) to include all voiceovers, TTS & mixed dialogue
+        const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.music;
 
         if (mediaStreamUrl) {
-          const isAudioOnly = Boolean(videoData.music);
-          const ext = isAudioOnly ? 'mp3' : 'mp4';
-          const mimeType = isAudioOnly ? 'audio/mp3' : 'video/mp4';
+          const isVideo = Boolean(videoData.play || videoData.wmplay || (!videoData.music && mediaStreamUrl));
+          const ext = isVideo ? 'mp4' : 'mp3';
+          const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
           const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
 
           const streamRes = await fetch(mediaStreamUrl, {
@@ -202,14 +205,14 @@ async function downloadMedia(cleanUrl: string, fileId: string, platform: 'tiktok
             const title = item.desc || 'Douyin Video';
             const author = item.author?.nickname || 'Douyin Creator';
             const duration = Math.round((item.duration || 30000) / 1000);
-            const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
             const videoUrl = item.video?.play_addr?.url_list?.[0]?.replace('playwm', 'play');
-            const targetUrl = audioUrl || videoUrl;
+            const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
+            const targetUrl = videoUrl || audioUrl;
 
             if (targetUrl) {
-              const isAudio = Boolean(audioUrl);
-              const ext = isAudio ? 'mp3' : 'mp4';
-              const mimeType = isAudio ? 'audio/mp3' : 'video/mp4';
+              const isVideo = Boolean(videoUrl);
+              const ext = isVideo ? 'mp4' : 'mp3';
+              const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
               const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
 
               const mediaRes = await fetch(targetUrl, {

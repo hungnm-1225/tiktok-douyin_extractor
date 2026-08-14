@@ -6,8 +6,7 @@ import {
   X, 
   Clipboard, 
   Check, 
-  Languages,
-  Film
+  Languages
 } from 'lucide-react';
 
 interface InputSectionProps {
@@ -15,7 +14,6 @@ interface InputSectionProps {
   setUrl: (url: string) => void;
   onSubmitUrl: () => void;
   onUploadFile: (file: File) => void;
-  onSelectSample: (sampleId: string) => void;
   isLoading: boolean;
 }
 
@@ -24,7 +22,6 @@ export const InputSection: React.FC<InputSectionProps> = ({
   setUrl,
   onSubmitUrl,
   onUploadFile,
-  onSelectSample,
   isLoading,
 }) => {
   const [isUploadMode, setIsUploadMode] = useState<boolean>(false);
@@ -189,25 +186,6 @@ export const InputSection: React.FC<InputSectionProps> = ({
                 ) : (
                   <span className="text-slate-400 italic">Hỗ trợ link Chia sẻ, Short link hoặc Web link</span>
                 )}
-              </div>
-
-              {/* Quick Sample Links */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-400">Mẫu:</span>
-                <button
-                  type="button"
-                  onClick={() => onSelectSample('tiktok-gadget-review')}
-                  className="px-2 py-0.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium border border-emerald-200/50 transition-colors cursor-pointer"
-                >
-                  🇻🇳 Tiếng Việt
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSelectSample('douyin-skincare-viral')}
-                  className="px-2 py-0.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-medium border border-rose-200/50 transition-colors cursor-pointer"
-                >
-                  🇨🇳 Douyin Tiếng Trung
-                </button>
               </div>
             </div>
           </div>
