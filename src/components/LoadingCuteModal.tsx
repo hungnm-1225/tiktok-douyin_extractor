@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Heart, Flower2, Mic, Bot, Trash2 } from 'lucide-react';
+import { Sparkles, Heart, PencilLine, Search, Clapperboard, AudioLines, Trash2 } from 'lucide-react';
 
 interface LoadingCuteModalProps {
   isOpen: boolean;
@@ -7,11 +7,11 @@ interface LoadingCuteModalProps {
 }
 
 const LOADING_MESSAGES = [
-  { text: 'Đang kết nối tới máy chủ và kiểm tra đường link... 🌸', icon: Flower2 },
-  { text: 'Đang trích xuất luồng âm thanh rõ nét từ video TikTok/Douyin... 🎵', icon: Mic },
-  { text: 'Gemini AI đang lắng nghe và bóc tách từng câu thoại... 🎙️', icon: Bot },
-  { text: 'Đang đánh dấu timestamp và đối chiếu dịch thuật tiếng Việt... 💡', icon: Heart },
-  { text: 'Đang hoàn tất kịch bản và dọn dẹp bộ nhớ tạm... 🧹', icon: Trash2 },
+  { text: 'Đang kết nối tới máy chủ và kiểm tra đường link... ', icon: Search },
+  { text: 'Đang trích xuất video ... ', icon: Clapperboard },
+  { text: 'Gemini AI đang lắng nghe và bóc tách từng câu thoại... ', icon: AudioLines },
+  { text: 'Đang đánh dấu timestamp và đối chiếu dịch thuật tiếng Việt... ', icon: PencilLine },
+  { text: 'Đang hoàn tất kịch bản và dọn dẹp bộ nhớ tạm... ', icon: Trash2 },
 ];
 
 export const LoadingCuteModal: React.FC<LoadingCuteModalProps> = ({ isOpen }) => {
