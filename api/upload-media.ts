@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 export const config = {
   maxDuration: 60,
@@ -12,11 +13,14 @@ export const config = {
 };
 
 const CANDIDATE_MODELS = [
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3-flash',
   'gemini-3.1-flash-lite',
-  'gemini-flash-lite-latest',
-  'gemini-flash-latest',
   'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
 ];
 
 const SYSTEM_INSTRUCTION = `Bạn là chuyên gia bóc tách kịch bản audio/video ngắn hàng đầu (TikTok & Douyin).
@@ -141,7 +145,7 @@ export default async function handler(req: any, res: any) {
 
     const fileId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const ext = fileName?.split('.').pop() || (mimeType?.includes('audio') ? 'mp3' : 'mp4');
-    localTempPath = path.join('/tmp', `upload_${fileId}.${ext}`);
+    localTempPath = path.join(os.tmpdir(), `upload_${fileId}.${ext}`);
 
     const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(base64Clean, 'base64');
@@ -236,10 +240,31 @@ export default async function handler(req: any, res: any) {
 
     const parsed = JSON.parse(geminiResponse.text);
 
+    const isVietnamese = parsed.isVietnamese ?? (parsed.sourceLanguage === 'vi' || parsed.sourceLanguageName?.toLowerCase().includes('việt'));
+    const rawSegments = parsed.segments || [];
+    const segments = rawSegments.map((seg: any, idx: number) => {
+      const translation = seg.translatedText || seg.vietnameseTranslation || (isVietnamese ? seg.originalText : undefined);
+      return {
+        id: seg.id || `seg_${idx + 1}`,
+        timestamp: seg.timestamp || `[00:${String(idx * 5).padStart(2, '0')} - 00:${String((idx + 1) * 5).padStart(2, '0')}]`,
+        startSec: typeof seg.startSec === 'number' ? seg.startSec : idx * 5,
+        endSec: typeof seg.endSec === 'number' ? seg.endSec : (idx + 1) * 5,
+        originalText: seg.originalText || '',
+        translatedText: translation,
+        vietnameseTranslation: translation,
+        speaker: seg.speaker,
+      };
+    });
+    const fullTranslation = parsed.fullTranslatedScript || parsed.fullVietnameseScript || (isVietnamese ? undefined : segments.map((s: any) => s.translatedText || s.originalText).join(' '));
+
     return res.status(200).json({
       success: true,
       data: {
         ...parsed,
+        segments,
+        fullTranslatedScript: fullTranslation,
+        fullVietnameseScript: fullTranslation,
+        isVietnamese: Boolean(isVietnamese),
         id: `ext_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         videoMetadata: {
           url: 'local_upload',

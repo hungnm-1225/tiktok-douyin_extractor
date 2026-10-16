@@ -16,6 +16,8 @@ export interface VideoMetadata {
   author?: string;
   duration?: number;
   coverImage?: string;
+  downloadUrl?: string;
+  streamUrl?: string;
 }
 
 export interface ExtractionResult {
@@ -31,6 +33,7 @@ export interface ExtractionResult {
   sourceLanguage: 'vi' | 'zh' | 'en' | 'other' | string;
   sourceLanguageName: string; // e.g. "Tiếng Việt", "Tiếng Trung (Douyin)"
   isVietnamese: boolean;
+  onlyVietnamese?: boolean;
   cleanedUpTempFiles?: boolean;
   modelUsed?: string;
 }

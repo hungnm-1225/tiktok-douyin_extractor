@@ -5,15 +5,121 @@
 
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
-import { InputSection } from './components/InputSection';
+import { InputSection, isValidMediaUrl } from './components/InputSection';
 import { ResultViewer } from './components/ResultViewer';
 import { LoadingCuteModal } from './components/LoadingCuteModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
-import { ExtractionResult } from './types';
-import { AlertCircle, Sparkles} from 'lucide-react';
+import { SampleModal } from './components/SampleModal';
+import { ExtractionResult, SampleVideoItem } from './types';
+import { AlertCircle, Sparkles } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 const LOCAL_STORAGE_HISTORY_KEY = 'tiktok_douyin_script_history_v2';
+
+const DEFAULT_SAMPLES: SampleVideoItem[] = [
+  {
+    id: 'douyin-skincare-viral',
+    platform: 'douyin',
+    title: 'Douyin Skincare: 3 Bước Trị Mụn Ẩn Cấp Tốc Bằng Salicylic Acid',
+    niche: 'Mỹ phẩm & Skincare (Tiếng Trung)',
+    description: 'Video Douyin 2.4M likes - Kịch bản gốc Tiếng Trung và Bản dịch Tiếng Việt.',
+    badge: 'Tiếng Trung (Douyin) • 2.4M Likes',
+    sampleResult: {
+      sourceLanguage: 'zh',
+      sourceLanguageName: 'Tiếng Trung (Douyin)',
+      isVietnamese: false,
+      summary: 'Kịch bản hướng dẫn chăm sóc da trị mụn ẩn 3 bước chuẩn Douyin cực viral.',
+      toneAndStyle: 'Chia sẻ kinh nghiệm làm đẹp, tự tin, cuốn hút',
+      videoMetadata: {
+        url: 'https://v.douyin.com/iJkLmNoP/',
+        platform: 'douyin',
+        title: 'Douyin Skincare: 3 Bước Trị Mụn Ẩn Cấp Tốc Bằng Salicylic Acid',
+        author: '@美妆学姐 (Tiểu Tuyết Skincare)',
+        duration: 28,
+      },
+      segments: [
+        {
+          id: 'seg_1',
+          timestamp: '00:00 - 00:04',
+          startSec: 0,
+          endSec: 4,
+          originalText: '如果你的脸上总是有这种密密麻麻的闭口粉刺，千万别去美容院乱挤！',
+          translatedText: 'Nếu mặt bạn đang chi chít mụn ẩn li ti thế này, xin đừng dại mà đi spa nặn bừa bãi!',
+          vietnameseTranslation: 'Nếu mặt bạn đang chi chít mụn ẩn li ti thế này, xin đừng dại mà đi spa nặn bừa bãi!',
+        },
+        {
+          id: 'seg_2',
+          timestamp: '00:04 - 00:09',
+          startSec: 4,
+          endSec: 9,
+          originalText: '不仅留坑留印，毛孔还会越来越粗大。其实在家只要用好这瓶水杨酸棉片。',
+          translatedText: 'Vừa để lại thâm rỗ, lỗ chân lông lại càng to ngoác ra. Thật ra ở nhà chỉ cần dùng đúng hũ bông Salicylic Acid này thôi.',
+          vietnameseTranslation: 'Vừa để lại thâm rỗ, lỗ chân lông lại càng to ngoác ra. Thật ra ở nhà chỉ cần dùng đúng hũ bông Salicylic Acid này thôi.',
+        },
+        {
+          id: 'seg_3',
+          timestamp: '00:09 - 00:15',
+          startSec: 9,
+          endSec: 15,
+          originalText: '先用凸起面轻轻打圈擦拭T区30秒，溶解深层油脂角质；再用平滑面湿敷在闭口处3分钟。',
+          translatedText: 'Đầu tiên dùng mặt vân nổi mát-xa nhẹ vùng chữ T trong 30 giây để hòa tan dầu thừa bít tắc; sau đó đắp mặt phẳng lên chỗ mụn ẩn 3 phút.',
+          vietnameseTranslation: 'Đầu tiên dùng mặt vân nổi mát-xa nhẹ vùng chữ T trong 30 giây để hòa tan dầu thừa bít tắc; sau đó đắp mặt phẳng lên chỗ mụn ẩn 3 phút.',
+        },
+        {
+          id: 'seg_4',
+          timestamp: '00:15 - 00:21',
+          startSec: 15,
+          endSec: 21,
+          originalText: '坚持一周，你摸摸你的脸蛋，是不是像剥了壳的鸡蛋一样滑嫩透亮？',
+          translatedText: 'Kiên trì đúng 1 tuần, bạn tự sờ lên má xem, da có láng mịn căng mọng như trứng gà bóc không?',
+          vietnameseTranslation: 'Kiên trì đúng 1 tuần, bạn tự sờ lên má xem, da có láng mịn căng mọng như trứng gà bóc không?',
+        },
+        {
+          id: 'seg_5',
+          timestamp: '00:21 - 00:28',
+          startSec: 21,
+          endSec: 28,
+          originalText: '今天左下角品牌方做活动，买一盒送一盒还包邮，赶紧去囤两盒！',
+          translatedText: 'Hôm nay nhãn hàng đang trợ giá góc trái màn hình, mua 1 tặng 1 lại còn freeship, các bà ấn nhanh kẻo hết deal!',
+          vietnameseTranslation: 'Hôm nay nhãn hàng đang trợ giá góc trái màn hình, mua 1 tặng 1 lại còn freeship, các bà ấn nhanh kẻo hết deal!',
+        },
+      ],
+      fullOriginalScript: '如果你的脸上总是有这种密密麻麻的闭口粉刺，千万别去美容院乱挤！不仅留坑留印，毛孔还会越来越粗大。其实在家只要用好这瓶水杨酸棉片。先用凸起面轻轻打圈擦拭T区30秒，溶解深层油脂角质；再用平滑面湿敷在闭口处3分钟。坚持一周，你摸摸你的脸蛋，是不是像剥了壳的鸡蛋一样滑嫩透亮？今天左下角品牌方做活动，买一盒送一盒还包邮，赶紧去囤两盒！',
+      fullTranslatedScript: 'Nếu mặt bạn đang chi chít mụn ẩn li ti thế này, xin đừng dại mà đi spa nặn bừa bãi! Vừa để lại thâm rỗ, lỗ chân lông lại càng to ngoác ra. Thật ra ở nhà chỉ cần dùng đúng hũ bông Salicylic Acid này thôi. Đầu tiên dùng mặt vân nổi mát-xa nhẹ vùng chữ T trong 30 giây để hòa tan dầu thừa bít tắc; sau đó đắp mặt phẳng lên chỗ mụn ẩn 3 phút. Kiên trì đúng 1 tuần, bạn tự sờ lên má xem, da có láng mịn căng mọng như trứng gà bóc không? Hôm nay nhãn hàng đang trợ giá góc trái màn hình, mua 1 tặng 1 lại còn freeship, các bà ấn nhanh kẻo hết deal!',
+      fullVietnameseScript: 'Nếu mặt bạn đang chi chít mụn ẩn li ti thế này, xin đừng dại mà đi spa nặn bừa bãi! Vừa để lại thâm rỗ, lỗ chân lông lại càng to ngoác ra. Thật ra ở nhà chỉ cần dùng đúng hũ bông Salicylic Acid này thôi. Đầu tiên dùng mặt vân nổi mát-xa nhẹ vùng chữ T trong 30 giây để hòa tan dầu thừa bít tắc; sau đó đắp mặt phẳng lên chỗ mụn ẩn 3 phút. Kiên trì đúng 1 tuần, bạn tự sờ lên má xem, da có láng mịn căng mọng như trứng gà bóc không? Hôm nay nhãn hàng đang trợ giá góc trái màn hình, mua 1 tặng 1 lại còn freeship, các bà ấn nhanh kẻo hết deal!',
+    },
+  },
+  {
+    id: 'tiktok-vn-food-review',
+    platform: 'tiktok',
+    title: 'Review Phố Ẩm Thực Hồ Thị Kỷ - Ăn Sập 10 Món',
+    niche: 'Ẩm Thực / Review (Tiếng Việt)',
+    description: 'Clip review ẩm thực Sài Gòn sôi động, giọng nói tự nhiên, năng lượng tích cực.',
+    badge: 'Tiếng Việt • 1.8M Views',
+    sampleResult: {
+      sourceLanguage: 'vi',
+      sourceLanguageName: 'Tiếng Việt',
+      isVietnamese: true,
+      summary: 'Review các món ăn vặt hot hit tại chợ Hồ Thị Kỷ với mức giá sinh viên.',
+      toneAndStyle: 'Hào hứng, gần gũi, review chân thật',
+      videoMetadata: {
+        url: 'https://www.tiktok.com/@sample2',
+        platform: 'tiktok',
+        title: 'Review Phố Ẩm Thực Hồ Thị Kỷ',
+        author: 'Ăn Cùng Quỳnh',
+        duration: 35,
+      },
+      segments: [
+        { id: 'seg_1', timestamp: '00:00 - 00:07', startSec: 0, endSec: 7, originalText: 'Hello mọi người! Hôm nay Quỳnh sẽ dắt mọi người đi ăn sập khu phố ẩm thực Hồ Thị Kỷ chỉ với 100 cành nha.', translatedText: 'Hello mọi người! Hôm nay Quỳnh sẽ dắt mọi người đi ăn sập khu phố ẩm thực Hồ Thị Kỷ chỉ với 100 cành nha.', vietnameseTranslation: 'Hello mọi người! Hôm nay Quỳnh sẽ dắt mọi người đi ăn sập khu phố ẩm thực Hồ Thị Kỷ chỉ với 100 cành nha.' },
+        { id: 'seg_2', timestamp: '00:07 - 00:15', startSec: 7, endSec: 15, originalText: 'Món đầu tiên chính là thịt xiên nướng phô mai béo ngậy.', translatedText: 'Món đầu tiên chính là thịt xiên nướng phô mai béo ngậy.', vietnameseTranslation: 'Món đầu tiên chính là thịt xiên nướng phô mai béo ngậy.' },
+        { id: 'seg_3', timestamp: '00:15 - 00:25', startSec: 15, endSec: 25, originalText: 'Tiếp theo là bánh tráng nướng giòn rụm thơm nức mũi.', translatedText: 'Tiếp theo là bánh tráng nướng giòn rụm thơm nức mũi.', vietnameseTranslation: 'Tiếp theo là bánh tráng nướng giòn rụm thơm nức mũi.' },
+        { id: 'seg_4', timestamp: '00:25 - 00:35', startSec: 25, endSec: 35, originalText: 'Cuối cùng tráng miệng bằng ly chè Thái sầu riêng siêu đỉnh!', translatedText: 'Cuối cùng tráng miệng bằng ly chè Thái sầu riêng siêu đỉnh!', vietnameseTranslation: 'Cuối cùng tráng miệng bằng ly chè Thái sầu riêng siêu đỉnh!' },
+      ],
+      fullOriginalScript: 'Hello mọi người! Hôm nay Quỳnh sẽ dắt mọi người đi ăn sập khu phố ẩm thực Hồ Thị Kỷ chỉ với 100 cành nha. Món đầu tiên chính là thịt xiên nướng phô mai béo ngậy. Tiếp theo là bánh tráng nướng giòn rụm thơm nức mũi. Cuối cùng tráng miệng bằng ly chè Thái sầu riêng siêu đỉnh!',
+      fullVietnameseScript: 'Hello mọi người! Hôm nay Quỳnh sẽ dắt mọi người đi ăn sập khu phố ẩm thực Hồ Thị Kỷ chỉ với 100 cành nha. Món đầu tiên chính là thịt xiên nướng phô mai béo ngậy. Tiếp theo là bánh tráng nướng giòn rụm thơm nức mũi. Cuối cùng tráng miệng bằng ly chè Thái sầu riêng siêu đỉnh!',
+    },
+  },
+];
 
 export default function App() {
   const [url, setUrl] = useState<string>('');
@@ -21,9 +127,12 @@ export default function App() {
   const [currentResult, setCurrentResult] = useState<ExtractionResult | null>(null);
   const [history, setHistory] = useState<ExtractionResult[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [isSampleModalOpen, setIsSampleModalOpen] = useState<boolean>(false);
+  const [samples, setSamples] = useState<SampleVideoItem[]>(DEFAULT_SAMPLES);
+  const [onlyVietnamese, setOnlyVietnamese] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Load history from LocalStorage
+  // Load history & samples from LocalStorage / API
   useEffect(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_HISTORY_KEY);
@@ -36,7 +145,37 @@ export default function App() {
     } catch (e) {
       console.warn('Could not read from LocalStorage:', e);
     }
+
+    // Fetch dynamic samples from API
+    fetch('/api/samples')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.samples && Array.isArray(data.samples) && data.samples.length > 0) {
+          setSamples(data.samples);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load samples from API, using defaults:', err);
+      });
   }, []);
+
+  const handleSelectSample = (sample: SampleVideoItem) => {
+    if (sample.sampleResult) {
+      const resultData = {
+        ...sample.sampleResult,
+        id: `ext_sample_${Date.now()}`,
+        createdAt: Date.now(),
+      } as ExtractionResult;
+      setCurrentResult(resultData);
+      saveToHistory(resultData);
+      confetti({
+        particleCount: 50,
+        spread: 60,
+        origin: { y: 0.6 },
+        colors: ['#F472B6', '#C084FC', '#818CF8'],
+      });
+    }
+  };
 
   const saveToHistory = (newResult: ExtractionResult) => {
     setHistory((prev) => {
@@ -78,6 +217,11 @@ export default function App() {
   const handleSubmitUrl = async () => {
     if (!url.trim()) return;
 
+    if (!isValidMediaUrl(url)) {
+      setErrorMessage('Vui lòng nhập đúng đường link video từ TikTok hoặc Douyin (bắt đầu bằng https://...). Hệ thống không tìm kiếm theo từ khóa văn bản.');
+      return;
+    }
+
     setIsLoading(true);
     setErrorMessage(null);
 
@@ -87,6 +231,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: url.trim(),
+          onlyVietnamese,
         }),
       });
 
@@ -107,6 +252,7 @@ export default function App() {
         throw new Error(msg);
       }
 
+      data.data.onlyVietnamese = onlyVietnamese;
       setCurrentResult(data.data);
       saveToHistory(data.data);
 
@@ -147,6 +293,7 @@ export default function App() {
             fileName: file.name,
             mimeType: file.type || 'audio/mp3',
             title: file.name.replace(/\.[^/.]+$/, ''),
+            onlyVietnamese,
           }),
         });
 
@@ -162,11 +309,16 @@ export default function App() {
         if (!res.ok || !data.success) {
           let msg = data.error || 'Lỗi bóc tách file media.';
           if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
-            msg = 'Hạn mức AI hôm nay tạm thời đạt giới hạn. Vui lòng thử lại sau giây lát!';
+            msg = 'Hạn mức AI hôm nay tạm thời đạt giới hạn. Vui lòng bấm nút [API Key] trên thanh menu để nhập API Key riêng!';
           }
           throw new Error(msg);
         }
 
+        data.data.onlyVietnamese = onlyVietnamese;
+        // Attach local blob URL for instant smooth video playback in CustomMediaPlayer
+        try {
+          data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+        } catch {}
         setCurrentResult(data.data);
         saveToHistory(data.data);
 
@@ -202,6 +354,11 @@ export default function App() {
       <Header
         historyCount={history.length}
         onOpenHistory={() => setIsHistoryOpen(true)}
+        onOpenSampleModal={() => setIsSampleModalOpen(true)}
+        onHomeClick={() => {
+          setCurrentResult(null);
+          setUrl('');
+        }}
       />
 
       {/* Main Container */}
@@ -252,6 +409,9 @@ export default function App() {
               onSubmitUrl={handleSubmitUrl}
               onUploadFile={handleUploadFile}
               isLoading={isLoading}
+              onOpenSampleModal={() => setIsSampleModalOpen(true)}
+              onlyVietnamese={onlyVietnamese}
+              setOnlyVietnamese={setOnlyVietnamese}
             />
           </div>
         ) : (
@@ -287,6 +447,14 @@ export default function App() {
         onSelectHistoryItem={(item) => setCurrentResult(item)}
         onClearHistory={handleClearHistory}
         onDeleteItem={handleDeleteHistoryItem}
+      />
+
+      {/* Sample Modal */}
+      <SampleModal
+        isOpen={isSampleModalOpen}
+        onClose={() => setIsSampleModalOpen(false)}
+        samples={samples}
+        onSelectSample={handleSelectSample}
       />
     </div>
   );

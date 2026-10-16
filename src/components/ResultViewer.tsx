@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Copy, 
   Check, 
@@ -7,36 +7,136 @@ import {
   Search, 
   Clock, 
   AlignLeft, 
-  Languages, 
-  ArrowLeft
+  ArrowLeft,
+  FileDown,
+  Sparkles,
+  User,
+  Video,
+  ChevronDown,
+  MessageSquareQuote,
+  Flame,
+  Volume2,
+  Play,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { ExtractionResult } from '../types';
-import { copyToClipboard, downloadTextFile, generateSrtContent, formatScriptAsText } from '../utils/exportUtils';
+import { ExtractionResult, ScriptSegment } from '../types';
+import { 
+  copyToClipboard, 
+  downloadTextFile, 
+  generateSrtContent, 
+  formatScriptAsText, 
+  exportDocxFile 
+} from '../utils/exportUtils';
+import { CustomMediaPlayer, CustomMediaPlayerRef } from './CustomMediaPlayer';
 
 interface ResultViewerProps {
   result: ExtractionResult;
   onReset: () => void;
 }
 
+interface DialogueTurn {
+  speaker: string;
+  startSec: number;
+  endSec: number;
+  timestamp: string;
+  originalText: string;
+  translatedText?: string;
+  count: number;
+}
+
+/**
+ * Groups consecutive segments by the same speaker into cohesive dialogue blocks
+ */
+function groupSegmentsBySpeaker(segments: ScriptSegment[], isVietnamese: boolean): DialogueTurn[] {
+  if (!segments || segments.length === 0) return [];
+
+  const turns: DialogueTurn[] = [];
+  let currentTurn: DialogueTurn | null = null;
+
+  segments.forEach((seg, idx) => {
+    const speaker = seg.speaker?.trim() || (isVietnamese ? 'Lời thoại' : 'Người nói');
+    const trans = seg.translatedText || seg.vietnameseTranslation || (isVietnamese ? seg.originalText : undefined);
+
+    if (currentTurn && currentTurn.speaker === speaker) {
+      // Append to current speaker's turn
+      currentTurn.originalText += ' ' + seg.originalText.trim();
+      if (trans && currentTurn.translatedText !== undefined) {
+        currentTurn.translatedText += ' ' + trans.trim();
+      }
+      currentTurn.endSec = seg.endSec;
+      currentTurn.count += 1;
+    } else {
+      // Push previous turn and start a new turn
+      if (currentTurn) {
+        turns.push(currentTurn);
+      }
+      currentTurn = {
+        speaker,
+        startSec: seg.startSec,
+        endSec: seg.endSec,
+        timestamp: seg.timestamp,
+        originalText: seg.originalText.trim(),
+        translatedText: trans ? trans.trim() : undefined,
+        count: 1,
+      };
+    }
+  });
+
+  if (currentTurn) {
+    turns.push(currentTurn);
+  }
+
+  return turns;
+}
+
 export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) => {
   // View mode: 'timestamps' vs 'fulltext'
   const [viewMode, setViewMode] = useState<'timestamps' | 'fulltext'>('timestamps');
-  // For foreign videos: 'bilingual' | 'vietnamese_only' | 'chinese_only'
-  const [langTab, setLangTab] = useState<'bilingual' | 'vietnamese_only' | 'chinese_only'>('bilingual');
+  // For foreign videos: if onlyVietnamese requested, default to 'vietnamese_only'
+  const [langTab, setLangTab] = useState<'bilingual' | 'vietnamese_only' | 'chinese_only'>(
+    result.onlyVietnamese ? 'vietnamese_only' : 'bilingual'
+  );
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [copiedType, setCopiedType] = useState<string | null>(null);
+  const [isExportingDocx, setIsExportingDocx] = useState<boolean>(false);
+  const [isDownloadDropdownOpen, setIsDownloadDropdownOpen] = useState<boolean>(false);
+  const [isPlayerVisible, setIsPlayerVisible] = useState<boolean>(true);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<CustomMediaPlayerRef>(null);
 
+  const mediaSrc = result.videoMetadata.streamUrl || result.videoMetadata.downloadUrl;
   const isVietnamese = result.isVietnamese;
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDownloadDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Filtered segments based on search
   const filteredSegments = result.segments.filter((seg) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
-    const matchOriginal = seg.originalText.toLowerCase().includes(term);
-    const matchTranslated = seg.translatedText?.toLowerCase().includes(term);
-    return matchOriginal || matchTranslated;
+    const matchOriginal = seg.originalText?.toLowerCase().includes(term);
+    const trans = seg.translatedText || seg.vietnameseTranslation || '';
+    const matchTranslated = trans.toLowerCase().includes(term);
+    const matchSpeaker = seg.speaker?.toLowerCase().includes(term);
+    return matchOriginal || matchTranslated || matchSpeaker;
   });
+
+  // Grouped dialogue turns for fulltext view
+  const dialogueTurns = groupSegmentsBySpeaker(filteredSegments, isVietnamese);
+  const distinctSpeakers = Array.from(
+    new Set(filteredSegments.map((s) => s.speaker?.trim()).filter(Boolean))
+  );
+  const isDialogue = distinctSpeakers.length > 1;
 
   const triggerConfetti = () => {
     confetti({
@@ -64,6 +164,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
       .toLowerCase()
       .substring(0, 25);
     downloadTextFile(`kich_ban_${result.videoMetadata.platform}_${safeTitle}.txt`, text);
+    setIsDownloadDropdownOpen(false);
     triggerConfetti();
   };
 
@@ -74,389 +175,646 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
       .toLowerCase()
       .substring(0, 25);
     downloadTextFile(`phu_de_${lang}_${safeTitle}.srt`, srt);
+    setIsDownloadDropdownOpen(false);
     triggerConfetti();
+  };
+
+  const handleExportDocx = async (mode: 'vietnamese' | 'chinese' | 'bilingual') => {
+    try {
+      setIsExportingDocx(true);
+      await exportDocxFile(result, mode);
+      setIsDownloadDropdownOpen(false);
+      triggerConfetti();
+    } catch (err) {
+      console.error('Lỗi xuất file docx:', err);
+    } finally {
+      setIsExportingDocx(false);
+    }
   };
 
   return (
     <div id="result-viewer-container" className="space-y-6 animate-in fade-in duration-300">
       
-      {/* Video Summary Header Card */}
+      {/* Top Navigation Bar: Back Button prominently at top */}
+      <div className="flex items-center justify-between gap-3 pb-1">
+        <button
+          id="top-back-btn"
+          type="button"
+          onClick={onReset}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white hover:bg-pink-50 text-pink-700 font-bold text-xs sm:text-sm border border-pink-200 shadow-xs transition-all hover:scale-105 active:scale-95 cursor-pointer"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span>Bóc Tách Video Khác</span>
+        </button>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border shadow-2xs ${
+            result.videoMetadata.platform === 'douyin'
+              ? 'bg-rose-100 text-rose-700 border-rose-200'
+              : result.videoMetadata.platform === 'tiktok'
+              ? 'bg-cyan-100 text-cyan-800 border-cyan-200'
+              : 'bg-purple-100 text-purple-700 border-purple-200'
+          }`}>
+            {result.videoMetadata.platform === 'douyin' ? 'Douyin (抖音)' : result.videoMetadata.platform === 'tiktok' ? 'TikTok' : 'Media File'}
+          </span>
+
+          <span className={`px-3 py-1 rounded-full text-xs font-bold border shadow-2xs ${
+            isVietnamese
+              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+              : 'bg-indigo-100 text-indigo-800 border-indigo-200'
+          }`}>
+            {isVietnamese ? '🇻🇳 Video Tiếng Việt' : `🇨🇳 ${result.sourceLanguageName} ➔ 🇻🇳 Tiếng Việt`}
+          </span>
+        </div>
+      </div>
+
+      {/* CARD 1: Video Metadata & Summary Card */}
       <div className="bg-white rounded-3xl p-6 sm:p-7 border border-pink-100/80 pastel-shadow space-y-5">
-        <div className="pb-4 border-b border-pink-50">
-          <div className="space-y-2 flex-1 pb-4">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider border ${
-                result.videoMetadata.platform === 'douyin'
-                  ? 'bg-rose-100 text-rose-700 border-rose-200'
-                  : result.videoMetadata.platform === 'tiktok'
-                  ? 'bg-cyan-100 text-cyan-800 border-cyan-200'
-                  : 'bg-purple-100 text-purple-700 border-purple-200'
-              }`}>
-                {result.videoMetadata.platform === 'douyin' ? 'Douyin (抖音)' : result.videoMetadata.platform === 'tiktok' ? 'TikTok' : 'Media File'}
-              </span>
-
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                isVietnamese
-                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                  : 'bg-indigo-100 text-indigo-800 border-indigo-200'
-              }`}>
-                {isVietnamese ? '🇻🇳 Video Tiếng Việt' : `🇨🇳 ${result.sourceLanguageName} ➔ 🇻🇳 Tiếng Việt`}
-              </span>
-
-              {result.videoMetadata.duration && (
-                <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium border border-slate-200">
-                  ~{result.videoMetadata.duration}s
-                </span>
-              )}
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1.5 flex-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-slate-800 leading-snug">
+                {result.videoMetadata.title}
+              </h2>
+              <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                {result.videoMetadata.author && (
+                  <p>
+                    Kênh/Tác giả: <strong className="text-slate-700 font-semibold">{result.videoMetadata.author}</strong>
+                  </p>
+                )}
+                {result.videoMetadata.duration && (
+                  <>
+                    <span>•</span>
+                    <span>Thời lượng: ~{result.videoMetadata.duration}s</span>
+                  </>
+                )}
+                {result.modelUsed && (
+                  <>
+                    <span>•</span>
+                    <span className="text-purple-600 font-semibold">AI: {result.modelUsed}</span>
+                  </>
+                )}
+              </div>
             </div>
-
-            <h2 className="text-base sm:text-lg font-bold text-slate-800 leading-snug">
-              {result.videoMetadata.title}
-            </h2>
-
-            {result.videoMetadata.author && (
-              <p className="text-xs text-slate-500">
-                Tác giả/Kênh: <span className="font-semibold text-slate-700">{result.videoMetadata.author}</span>
-              </p>
-            )}
           </div>
 
-          {/* Quick Copy & Export Action Buttons */}
-          <br></br>
-          <div className="flex items-center flex-wrap gap-2 shrink-0">
+          {/* Video Summary & Tone Card */}
+          {(result.summary || result.toneAndStyle) && (
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-pink-50/70 via-purple-50/60 to-indigo-50/60 border border-pink-100/80 space-y-2 mt-1">
+              {result.summary && (
+                <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                  <span className="font-bold text-purple-900">💡 Tóm tắt nội dung: </span>
+                  <span className="italic">{result.summary}</span>
+                </div>
+              )}
+              {result.toneAndStyle && (
+                <div className="text-xs text-slate-600 flex items-center gap-1.5 flex-wrap pt-0.5">
+                  <span className="font-bold text-pink-700">🎭 Phong cách:</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-white text-pink-800 font-semibold border border-pink-200 shadow-2xs">
+                    {result.toneAndStyle}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Action Toolbar: Quick Copy + Compact Download Dropdown */}
+          <div className="flex items-center flex-wrap gap-2.5 pt-2 border-t border-pink-50">
+            {/* 1. Quick Copy Button */}
             {isVietnamese ? (
-              /* Vietnamese video actions */
-              <>
-                <button
-                  id="copy-vi-btn"
-                  type="button"
-                  onClick={() => handleCopy('vietnamese')}
-                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
-                >
-                  {copiedType === 'vietnamese' ? (
-                    <>
-                      <Check className="h-4 w-4 text-white" />
-                      <span>Đã Copy Kịch Bản!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      <span>Sao Chép Kịch Bản</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  id="export-txt-btn"
-                  type="button"
-                  onClick={() => handleExportTxt('vietnamese')}
-                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all cursor-pointer"
-                  title="Tải file text"
-                >
-                  <FileText className="h-4 w-4 text-slate-600" />
-                  <span>Xuất .TXT</span>
-                </button>
-
-                <button
-                  id="export-srt-btn"
-                  type="button"
-                  onClick={() => handleExportSrt('vi')}
-                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-800 font-bold text-xs transition-all cursor-pointer"
-                  title="Tải phụ đề .SRT cho CapCut / Premiere"
-                >
-                  <Download className="h-4 w-4 text-purple-600" />
-                  <span>Tải .SRT (Phụ đề)</span>
-                </button>
-              </>
+              <button
+                id="copy-vi-btn"
+                type="button"
+                onClick={() => handleCopy('vietnamese')}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
+              >
+                {copiedType === 'vietnamese' ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    <span>Đã Copy Kịch Bản!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-4 w-4" />
+                    <span>Sao Chép Kịch Bản</span>
+                  </>
+                )}
+              </button>
             ) : (
-              /* Chinese/foreign video actions */
-              <>
-                <button
-                  id="copy-translated-vi-btn"
-                  type="button"
-                  onClick={() => handleCopy('vietnamese')}
-                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
-                >
-                  {copiedType === 'vietnamese' ? (
-                    <>
-                      <Check className="h-4 w-4" />
-                      <span>Đã Copy Tiếng Việt!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      <span>Copy Bản Dịch Tiếng Việt</span>
-                    </>
-                  )}
-                </button>
+              <button
+                id="copy-translated-vi-btn"
+                type="button"
+                onClick={() => handleCopy('vietnamese')}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
+              >
+                {copiedType === 'vietnamese' ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    <span>Đã Copy Tiếng Việt!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-4 w-4" />
+                    <span>Copy Bản Dịch Tiếng Việt</span>
+                  </>
+                )}
+              </button>
+            )}
 
+            {/* Quick Copy for Foreign video: Copy Chinese or Bilingual */}
+            {!isVietnamese && (
+              <>
                 <button
                   id="copy-chinese-btn"
                   type="button"
                   onClick={() => handleCopy('chinese')}
-                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs transition-all border border-rose-200 cursor-pointer"
                 >
-                  {copiedType === 'chinese' ? (
-                    <>
-                      <Check className="h-4 w-4" />
-                      <span>Đã Copy Tiếng Trung!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4 text-rose-600" />
-                      <span>Copy Gốc Tiếng Trung</span>
-                    </>
-                  )}
+                  {copiedType === 'chinese' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-rose-600" />}
+                  <span>Copy Gốc Tiếng Trung</span>
                 </button>
-
                 <button
                   id="copy-bilingual-btn"
                   type="button"
                   onClick={() => handleCopy('bilingual')}
-                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-purple-100 hover:bg-purple-200 text-purple-800 font-bold text-xs transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-xs transition-all border border-purple-200 cursor-pointer"
                 >
-                  {copiedType === 'bilingual' ? (
-                    <>
-                      <Check className="h-4 w-4" />
-                      <span>Đã Copy Song Ngữ!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4 text-purple-600" />
-                      <span>Copy Song Ngữ</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  id="export-txt-bilingual-btn"
-                  type="button"
-                  onClick={() => handleExportTxt('bilingual')}
-                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all cursor-pointer"
-                >
-                  <FileText className="h-4 w-4 text-slate-600" />
-                  <span>Xuất .TXT</span>
-                </button>
-
-                <button
-                  id="export-srt-vi-btn"
-                  type="button"
-                  onClick={() => handleExportSrt('vi')}
-                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-indigo-100 hover:bg-indigo-200 text-indigo-800 font-bold text-xs transition-all cursor-pointer"
-                  title="Tải phụ đề tiếng Việt .SRT"
-                >
-                  <Download className="h-4 w-4 text-indigo-600" />
-                  <span>Phụ Đề .SRT</span>
+                  {copiedType === 'bilingual' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-purple-600" />}
+                  <span>Copy Song Ngữ</span>
                 </button>
               </>
             )}
+
+            {/* 2. Compact Download Dropdown Button */}
+            <div className="relative" ref={dropdownRef}>
+              <button
+                id="download-dropdown-btn"
+                type="button"
+                onClick={() => setIsDownloadDropdownOpen((prev) => !prev)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-100 via-purple-100 to-indigo-100 hover:from-pink-200 hover:via-purple-200 hover:to-indigo-200 text-purple-950 font-bold text-xs sm:text-sm border border-purple-200/80 shadow-xs transition-all active:scale-95 cursor-pointer"
+              >
+                <Download className="h-4 w-4 text-purple-700" />
+                <span>Tải Xuống / Xuất File</span>
+                <ChevronDown className={`h-4 w-4 text-purple-700 transition-transform duration-200 ${isDownloadDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Dropdown Menu Popup */}
+              {isDownloadDropdownOpen && (
+                <div
+                  id="download-dropdown-menu"
+                  className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-72 bg-white rounded-2xl p-2 border border-pink-100 shadow-xl shadow-purple-900/10 z-30 space-y-1 animate-in fade-in zoom-in-95 duration-150"
+                >
+                  {/* Option 1: Word .DOCX */}
+                  <button
+                    type="button"
+                    disabled={isExportingDocx}
+                    onClick={() => handleExportDocx(isVietnamese ? 'vietnamese' : langTab === 'chinese_only' ? 'chinese' : langTab === 'vietnamese_only' ? 'vietnamese' : 'bilingual')}
+                    className="w-full flex items-start gap-3 p-2.5 rounded-xl hover:bg-purple-50 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-2 rounded-lg bg-blue-100 text-blue-700 group-hover:bg-blue-200">
+                      <FileDown className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">
+                        {isExportingDocx ? 'Đang tạo .DOCX...' : 'Xuất File Word (.DOCX)'}
+                      </div>
+                      <div className="text-[11px] text-slate-400">Bảng timestamp & phân tích kịch bản</div>
+                    </div>
+                  </button>
+
+                  {/* Option 2: Plain Text .TXT */}
+                  <button
+                    type="button"
+                    onClick={() => handleExportTxt(isVietnamese ? 'vietnamese' : langTab === 'chinese_only' ? 'chinese' : langTab === 'vietnamese_only' ? 'vietnamese' : 'bilingual')}
+                    className="w-full flex items-start gap-3 p-2.5 rounded-xl hover:bg-purple-50 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-2 rounded-lg bg-slate-100 text-slate-700 group-hover:bg-slate-200">
+                      <FileText className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Xuất File Văn Bản (.TXT)</div>
+                      <div className="text-[11px] text-slate-400">File text gọn nhẹ, dễ copy lưu trữ</div>
+                    </div>
+                  </button>
+
+                  {/* Option 3: Subtitle .SRT */}
+                  <button
+                    type="button"
+                    onClick={() => handleExportSrt(isVietnamese ? 'vi' : langTab === 'chinese_only' ? 'zh' : 'vi')}
+                    className="w-full flex items-start gap-3 p-2.5 rounded-xl hover:bg-purple-50 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="p-2 rounded-lg bg-purple-100 text-purple-700 group-hover:bg-purple-200">
+                      <Download className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800">Tải Phụ Đề (.SRT)</div>
+                      <div className="text-[11px] text-slate-400">Dành cho CapCut, Premiere, DaVinci</div>
+                    </div>
+                  </button>
+
+                  {/* Option 4: Direct MP4 Video Download (if available) */}
+                  {result.videoMetadata.downloadUrl && (
+                    <a
+                      href={result.videoMetadata.downloadUrl}
+                      download
+                      onClick={() => setIsDownloadDropdownOpen(false)}
+                      className="w-full flex items-start gap-3 p-2.5 rounded-xl hover:bg-pink-50 text-left transition-colors cursor-pointer group border-t border-pink-50"
+                    >
+                      <div className="p-2 rounded-lg bg-pink-100 text-pink-700 group-hover:bg-pink-200">
+                        <Video className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-pink-700">Tải Video Gốc (MP4)</div>
+                        <div className="text-[11px] text-slate-400">Video chất lượng cao (Douyin không logo)</div>
+                      </div>
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
+      </div>
 
-        {/* View Switcher Controls */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1">
-          {/* If Chinese, choose tab */}
-          {!isVietnamese ? (
-            <div className="flex items-center p-1 bg-pink-50/80 rounded-2xl border border-pink-200/50 flex-wrap gap-1">
-              <button
-                type="button"
-                onClick={() => setLangTab('bilingual')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  langTab === 'bilingual'
-                    ? 'bg-white text-purple-800 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                Song Ngữ 2 Cột (Trung - Việt)
-              </button>
-              <button
-                type="button"
-                onClick={() => setLangTab('vietnamese_only')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  langTab === 'vietnamese_only'
-                    ? 'bg-white text-emerald-800 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                Chỉ Tiếng Việt
-              </button>
-              <button
-                type="button"
-                onClick={() => setLangTab('chinese_only')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  langTab === 'chinese_only'
-                    ? 'bg-white text-rose-800 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                Chỉ Tiếng Trung
-              </button>
+      {/* CARD 1.5: Custom Pastel Media Player for Video/Audio Verification */}
+      {mediaSrc && (
+        <div id="media-player-section" className="space-y-2.5">
+          <div className="flex items-center justify-between px-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+              <Video className="h-4 w-4 text-pink-500" />
+              <span>Khung Video Đối Chiếu Trực Quan</span>
+              <span className="text-[11px] font-normal text-slate-400 hidden sm:inline">
+                (Bấm vào mốc thời gian trong kịch bản để video tự động nhảy đến đúng giây đó)
+              </span>
             </div>
-          ) : (
-            /* Vietnamese View Mode Switcher */
-            <div className="flex items-center p-1 bg-pink-50/80 rounded-2xl border border-pink-200/50">
+
+            <button
+              type="button"
+              onClick={() => setIsPlayerVisible(!isPlayerVisible)}
+              className="inline-flex items-center gap-1 text-xs font-semibold text-purple-700 hover:text-purple-900 px-2.5 py-1 rounded-lg hover:bg-pink-50 transition-colors cursor-pointer"
+            >
+              {isPlayerVisible ? <EyeOff className="h-3.5 w-3.5 text-pink-500" /> : <Eye className="h-3.5 w-3.5 text-pink-500" />}
+              <span>{isPlayerVisible ? 'Thu gọn video' : 'Mở rộng video'}</span>
+            </button>
+          </div>
+
+          {isPlayerVisible && (
+            <CustomMediaPlayer
+              ref={playerRef}
+              src={mediaSrc}
+              title={result.videoMetadata.title}
+              platform={result.videoMetadata.platform}
+              duration={result.videoMetadata.duration}
+              coverImage={result.videoMetadata.coverImage}
+            />
+          )}
+        </div>
+      )}
+
+      {/* CARD 2: UNIFIED SCRIPT CONTAINER (Tabs & Script Data in ONE coherent card) */}
+      <div className="bg-white rounded-3xl border border-pink-100/90 pastel-shadow overflow-hidden">
+        
+        {/* Integrated Tabs Header - Directly connected to script data */}
+        <div className="bg-[#FFF9FB] p-4 sm:p-5 border-b border-pink-100/80 space-y-3">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            
+            {/* View Mode Switcher: Timestamps vs Fulltext */}
+            <div className="flex items-center p-1 bg-white rounded-2xl border border-pink-200/60 shadow-xs flex-wrap gap-1">
               <button
                 type="button"
                 onClick={() => setViewMode('timestamps')}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'timestamps'
-                    ? 'bg-white text-purple-800 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
+                    ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <Clock className="h-3.5 w-3.5 text-purple-600" />
+                <Clock className="h-3.5 w-3.5" />
                 <span>Theo Mốc Thời Gian (Timestamp)</span>
               </button>
+              
               <button
                 type="button"
                 onClick={() => setViewMode('fulltext')}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'fulltext'
-                    ? 'bg-white text-purple-800 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
+                    ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <AlignLeft className="h-3.5 w-3.5 text-pink-600" />
-                <span>Đoạn Văn Liền Mạch</span>
+                <AlignLeft className="h-3.5 w-3.5" />
+                <span>Đoạn Văn Liền Mạch (Tách Người Nói)</span>
               </button>
             </div>
-          )}
 
-          {/* Quick Search */}
-          <div className="relative w-full sm:w-56">
-            <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Tìm từ khóa trong kịch bản..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-pink-300 outline-none transition-all"
-            />
+            {/* Quick Search inside script */}
+            <div className="relative w-full md:w-64">
+              <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Tìm từ khóa trong kịch bản..."
+                className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white border border-pink-200/80 focus:border-pink-400 outline-none transition-all shadow-inner"
+              />
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Main Script Display Card */}
-      <div className="bg-white rounded-3xl border border-pink-100/80 pastel-shadow overflow-hidden">
-        
-        {/* VIEW 1: Vietnamese Video */}
-        {isVietnamese ? (
-          viewMode === 'fulltext' ? (
-            /* Vietnamese Fulltext View */
+          {/* Foreign Video: Bilingual Column Mode Selector */}
+          {!isVietnamese && (
+            <div className="flex items-center gap-2 pt-1 flex-wrap">
+              <span className="text-xs font-semibold text-slate-500">Ngôn ngữ hiển thị:</span>
+              <div className="inline-flex items-center p-1 bg-white rounded-xl border border-pink-200/60 shadow-xs gap-1">
+                <button
+                  type="button"
+                  onClick={() => setLangTab('bilingual')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    langTab === 'bilingual'
+                      ? 'bg-purple-100 text-purple-900'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Song Ngữ (Trung - Việt)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLangTab('vietnamese_only')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    langTab === 'vietnamese_only'
+                      ? 'bg-emerald-100 text-emerald-900'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  🇻🇳 Chỉ Tiếng Việt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLangTab('chinese_only')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    langTab === 'chinese_only'
+                      ? 'bg-rose-100 text-rose-900'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  🇨🇳 Chỉ Tiếng Trung
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Script Content Area */}
+        <div className="p-0">
+          
+          {/* ============================================================== */}
+          {/* MODE 1: FULLTEXT VIEW (PLAIN TEXT / CLEAN CONVERSATION LINES)  */}
+          {/* ============================================================== */}
+          {viewMode === 'fulltext' ? (
             <div className="p-6 sm:p-8 space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-pink-50">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Toàn bộ kịch bản lời thoại:
+                <span className="text-xs font-bold uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
+                  <MessageSquareQuote className="h-4 w-4 text-pink-500" />
+                  <span>
+                    {isDialogue
+                      ? 'Kịch Bản Đối Thoại Liền Mạch'
+                      : 'Toàn Bộ Lời Thoại Liền Mạch'}
+                  </span>
                 </span>
                 <span className="text-xs text-slate-400">
-                  {result.fullOriginalScript.split(/\s+/).length} từ
+                  {isDialogue ? `${filteredSegments.length} câu đối thoại` : `${result.fullOriginalScript.split(/\s+/).length} từ`}
                 </span>
-              </div>
-              <p className="text-sm sm:text-base text-slate-800 leading-relaxed whitespace-pre-wrap font-normal">
-                {result.fullOriginalScript}
-              </p>
-            </div>
-          ) : (
-            /* Vietnamese Timestamps View */
-            <div className="divide-y divide-pink-50">
-              <div className="grid grid-cols-12 bg-[#FFF9FB] p-3.5 px-6 text-xs font-bold text-slate-500 border-b border-pink-100">
-                <div className="col-span-3 sm:col-span-2">Mốc Thời Gian</div>
-                <div className="col-span-9 sm:col-span-10">Lời Thoại Video</div>
               </div>
 
               {filteredSegments.length === 0 ? (
-                <div className="p-8 text-center text-slate-400 text-xs">
+                <div className="py-12 text-center text-slate-400 text-xs">
                   Không tìm thấy câu thoại nào chứa từ khóa tìm kiếm.
                 </div>
+              ) : isDialogue ? (
+                /* CASE A: Multi-speaker conversation -> Clean plain text lines with dash "-" */
+                <div className="p-6 rounded-2xl bg-[#FFFBFD] border border-pink-100/70 font-sans text-sm sm:text-base leading-relaxed space-y-3.5 shadow-2xs select-text">
+                  {filteredSegments.map((seg, idx) => {
+                    const trans = seg.translatedText || seg.vietnameseTranslation || seg.originalText;
+                    return (
+                      <div key={seg.id || idx} className="flex items-start gap-2.5 group">
+                        <span className="text-pink-500 font-bold select-none text-base leading-snug shrink-0">-</span>
+                        <div className="flex-1 space-y-1">
+                          {isVietnamese ? (
+                            <p className="text-slate-800 leading-relaxed font-normal flex items-start gap-1.5">
+                              <span>{seg.originalText}</span>
+                              {mediaSrc && (
+                                <button
+                                  type="button"
+                                  onClick={() => playerRef.current?.seekTo(seg.startSec)}
+                                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-pink-500 hover:text-pink-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
+                                  title={`Phát video từ ${seg.timestamp}`}
+                                >
+                                  <Play className="h-3.5 w-3.5 fill-pink-400" />
+                                </button>
+                              )}
+                            </p>
+                          ) : (
+                            <>
+                              {langTab !== 'vietnamese_only' && (
+                                <p className="text-slate-800 leading-relaxed font-normal flex items-start gap-1.5">
+                                  <span>{seg.originalText}</span>
+                                  {mediaSrc && (
+                                    <button
+                                      type="button"
+                                      onClick={() => playerRef.current?.seekTo(seg.startSec)}
+                                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-pink-500 hover:text-pink-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
+                                      title={`Phát video từ ${seg.timestamp}`}
+                                    >
+                                      <Play className="h-3.5 w-3.5 fill-pink-400" />
+                                    </button>
+                                  )}
+                                </p>
+                              )}
+                              {langTab !== 'chinese_only' && (
+                                <p className={`leading-relaxed ${langTab === 'bilingual' ? 'text-emerald-800 text-xs sm:text-sm font-medium pl-3 border-l-2 border-emerald-300' : 'text-slate-800 font-normal'}`}>
+                                  {trans}
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
-                filteredSegments.map((seg, idx) => (
-                  <div
-                    key={seg.id || idx}
-                    className="grid grid-cols-12 p-4 sm:px-6 gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
-                  >
-                    <div className="col-span-3 sm:col-span-2">
-                      <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-100 inline-block">
-                        {seg.timestamp}
-                      </span>
-                    </div>
-                    <div className="col-span-9 sm:col-span-10">
-                      <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-medium">
-                        {seg.originalText}
-                      </p>
-                    </div>
+                /* CASE B: Single speaker monologue / review -> Natural prose paragraph */
+                <div className="p-6 rounded-2xl bg-[#FFFBFD] border border-pink-100/70 font-sans text-sm sm:text-base text-slate-800 leading-relaxed space-y-4 shadow-2xs select-text">
+                  {isVietnamese ? (
+                    <p className="whitespace-pre-wrap font-normal leading-relaxed">
+                      {result.fullOriginalScript || filteredSegments.map((s) => s.originalText.trim()).join(' ')}
+                    </p>
+                  ) : (
+                    <>
+                      {langTab !== 'vietnamese_only' && (
+                        <div className="space-y-1.5">
+                          <span className="text-[11px] font-bold text-rose-600 block uppercase tracking-wider">
+                            🇨🇳 Kịch Bản Gốc Tiếng Trung:
+                          </span>
+                          <p className="whitespace-pre-wrap font-normal leading-relaxed text-slate-800">
+                            {result.fullOriginalScript || filteredSegments.map((s) => s.originalText.trim()).join(' ')}
+                          </p>
+                        </div>
+                      )}
+
+                      {langTab !== 'chinese_only' && (
+                        <div className={`space-y-1.5 ${langTab === 'bilingual' ? 'pt-4 border-t border-pink-100' : ''}`}>
+                          <span className="text-[11px] font-bold text-emerald-700 block uppercase tracking-wider">
+                            🇻🇳 Bản Dịch Tiếng Việt Theo Ngữ Cảnh:
+                          </span>
+                          <p className="whitespace-pre-wrap font-medium leading-relaxed text-slate-900">
+                            {result.fullTranslatedScript || result.fullVietnameseScript || filteredSegments.map((s) => s.translatedText || s.vietnameseTranslation || s.originalText).join(' ')}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* ============================================================== */
+            /* MODE 2: TIMESTAMPS VIEW (DETAILED LINE-BY-LINE TIMESTAMPS)      */
+            /* ============================================================== */
+            isVietnamese ? (
+              /* Vietnamese Timestamps View */
+              <div className="divide-y divide-pink-50">
+                <div className="grid grid-cols-12 bg-[#FFF9FB] p-3 px-6 text-xs font-bold text-slate-500 border-b border-pink-100">
+                  <div className="col-span-3 sm:col-span-2">Mốc Thời Gian</div>
+                  <div className="col-span-9 sm:col-span-10">Lời Thoại Video</div>
+                </div>
+
+                {filteredSegments.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 text-xs">
+                    Không tìm thấy câu thoại nào chứa từ khóa tìm kiếm.
                   </div>
-                ))
-              )}
-            </div>
-          )
-        ) : (
-          /* VIEW 2: Chinese (or Foreign) Video */
-          <div className="divide-y divide-pink-50">
-            {/* Header row */}
-            <div className="grid grid-cols-12 bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 p-4 px-6 text-xs font-bold text-slate-700 border-b border-pink-100">
-              <div className="col-span-12 sm:col-span-2 flex items-center gap-1 text-purple-900">
-                <Clock className="h-3.5 w-3.5 text-purple-600" />
-                <span>Thời Gian</span>
-              </div>
-              
-              {langTab !== 'vietnamese_only' && (
-                <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} text-rose-900 flex items-center gap-1`}>
-                  <span>🇨🇳 Kịch Bản Gốc Tiếng Trung (Douyin)</span>
-                </div>
-              )}
-
-              {langTab !== 'chinese_only' && (
-                <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} text-indigo-900 flex items-center gap-1`}>
-                  <span>🇻🇳 Bản Dịch Tiếng Việt</span>
-                </div>
-              )}
-            </div>
-
-            {filteredSegments.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 text-xs">
-                Không tìm thấy câu thoại nào chứa từ khóa tìm kiếm.
+                ) : (
+                  filteredSegments.map((seg, idx) => (
+                    <div
+                      key={seg.id || idx}
+                      className="grid grid-cols-12 p-3.5 sm:px-6 gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
+                    >
+                      <div className="col-span-3 sm:col-span-2">
+                        {mediaSrc ? (
+                          <button
+                            type="button"
+                            onClick={() => playerRef.current?.seekTo(seg.startSec)}
+                            className="font-mono text-xs font-bold text-purple-800 bg-purple-50 hover:bg-pink-100 hover:text-pink-700 px-2.5 py-1 rounded-lg border border-purple-100 hover:border-pink-300 transition-all cursor-pointer inline-flex items-center gap-1 group/ts"
+                            title="Bấm để phát video tại mốc thời gian này"
+                          >
+                            <Play className="h-3 w-3 text-pink-500 fill-pink-400 group-hover/ts:scale-110 transition-transform" />
+                            <span>{seg.timestamp}</span>
+                          </button>
+                        ) : (
+                          <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-100 inline-block">
+                            {seg.timestamp}
+                          </span>
+                        )}
+                      </div>
+                      <div className="col-span-9 sm:col-span-10 space-y-1">
+                        {seg.speaker && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 font-bold inline-block">
+                            🗣️ {seg.speaker}
+                          </span>
+                        )}
+                        <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-medium">
+                          {seg.originalText}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             ) : (
-              filteredSegments.map((seg, idx) => (
-                <div
-                  key={seg.id || idx}
-                  className="grid grid-cols-12 p-4 sm:px-6 gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
-                >
-                  {/* Timestamp */}
-                  <div className="col-span-12 sm:col-span-2">
-                    <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-100 inline-block">
-                      {seg.timestamp}
-                    </span>
+              /* Foreign / Chinese Timestamps View */
+              <div className="divide-y divide-pink-50">
+                <div className="grid grid-cols-12 bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 p-3.5 px-6 text-xs font-bold text-slate-700 border-b border-pink-100">
+                  <div className="col-span-12 sm:col-span-2 flex items-center gap-1 text-purple-900">
+                    <Clock className="h-3.5 w-3.5 text-purple-600" />
+                    <span>Thời Gian</span>
                   </div>
-
-                  {/* Chinese Original */}
+                  
                   {langTab !== 'vietnamese_only' && (
-                    <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1`}>
-                      <span className="sm:hidden text-[10px] font-bold text-rose-600 block uppercase">
-                        Gốc Tiếng Trung:
-                      </span>
-                      <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-normal">
-                        {seg.originalText}
-                      </p>
+                    <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} text-rose-900 flex items-center gap-1`}>
+                      <span>🇨🇳 Kịch Bản Gốc Tiếng Trung (Douyin)</span>
                     </div>
                   )}
 
-                  {/* Vietnamese Translation */}
                   {langTab !== 'chinese_only' && (
-                    <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1 sm:border-l sm:border-pink-50 sm:pl-3`}>
-                      <span className="sm:hidden text-[10px] font-bold text-indigo-600 block uppercase">
-                        Bản Dịch Tiếng Việt:
-                      </span>
-                      <p className="text-xs sm:text-sm font-medium text-slate-900 leading-relaxed bg-pink-50/40 p-2 rounded-xl border border-pink-100/50">
-                        {seg.translatedText || seg.originalText}
-                      </p>
+                    <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} text-indigo-900 flex items-center gap-1`}>
+                      <span>🇻🇳 Bản Dịch Tiếng Việt Theo Ngữ Cảnh</span>
                     </div>
                   )}
                 </div>
-              ))
-            )}
-          </div>
-        )}
+
+                {filteredSegments.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 text-xs">
+                    Không tìm thấy câu thoại nào chứa từ khóa tìm kiếm.
+                  </div>
+                ) : (
+                  filteredSegments.map((seg, idx) => (
+                    <div
+                      key={seg.id || idx}
+                      className="grid grid-cols-12 p-3.5 sm:px-6 gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
+                    >
+                      {/* Timestamp */}
+                      <div className="col-span-12 sm:col-span-2">
+                        {mediaSrc ? (
+                          <button
+                            type="button"
+                            onClick={() => playerRef.current?.seekTo(seg.startSec)}
+                            className="font-mono text-xs font-bold text-purple-800 bg-purple-50 hover:bg-pink-100 hover:text-pink-700 px-2.5 py-1 rounded-lg border border-purple-100 hover:border-pink-300 transition-all cursor-pointer inline-flex items-center gap-1 group/ts"
+                            title="Bấm để phát video tại mốc thời gian này"
+                          >
+                            <Play className="h-3 w-3 text-pink-500 fill-pink-400 group-hover/ts:scale-110 transition-transform" />
+                            <span>{seg.timestamp}</span>
+                          </button>
+                        ) : (
+                          <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-100 inline-block">
+                            {seg.timestamp}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Chinese Original */}
+                      {langTab !== 'vietnamese_only' && (
+                        <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1`}>
+                          <span className="sm:hidden text-[10px] font-bold text-rose-600 block uppercase">
+                            Gốc Tiếng Trung:
+                          </span>
+                          <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-normal">
+                            {seg.originalText}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Vietnamese Translation */}
+                      {langTab !== 'chinese_only' && (
+                        <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1 sm:border-l sm:border-pink-50 sm:pl-3`}>
+                          <span className="sm:hidden text-[10px] font-bold text-indigo-600 block uppercase">
+                            Bản Dịch Tiếng Việt:
+                          </span>
+                          {seg.speaker && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 font-bold mb-1 inline-block">
+                              🗣️ {seg.speaker}
+                            </span>
+                          )}
+                          <p className="text-xs sm:text-sm font-medium text-slate-900 leading-relaxed bg-pink-50/40 p-2.5 rounded-xl border border-pink-100/50">
+                            {seg.translatedText || seg.vietnameseTranslation || seg.originalText}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )
+          )}
+        </div>
 
         {/* Footer info bar */}
         <div className="p-3.5 px-6 bg-[#FFF9FB] border-t border-pink-100 flex items-center justify-between text-xs text-slate-500 flex-wrap gap-2">
@@ -467,19 +825,6 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
             Trích xuất bởi Gemini AI • Sẵn sàng xuất phụ đề CapCut/Premiere
           </span>
         </div>
-      </div>
-
-      {/* Process Another Video Button */}
-      <div className="pt-2 text-center">
-        <button
-          id="new-video-btn"
-          type="button"
-          onClick={onReset}
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-white hover:bg-pink-50 text-pink-700 font-bold text-xs sm:text-sm border border-pink-200 shadow-sm transition-all hover:scale-105 active:scale-95 cursor-pointer"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Bóc Tách Video Khác</span>
-        </button>
       </div>
     </div>
   );

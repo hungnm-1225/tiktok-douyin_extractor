@@ -1,17 +1,22 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import vm from 'node:vm';
 
 export const config = {
   maxDuration: 60,
 };
 
 const CANDIDATE_MODELS = [
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3-flash',
   'gemini-3.1-flash-lite',
-  'gemini-flash-lite-latest',
-  'gemini-flash-latest',
   'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
 ];
 
 const SYSTEM_INSTRUCTION = `Bạn là chuyên gia bóc tách kịch bản audio/video ngắn hàng đầu (TikTok & Douyin).
@@ -118,9 +123,98 @@ function identifyPlatform(url: string): 'tiktok' | 'douyin' | 'sample' {
 }
 
 async function downloadMedia(cleanUrl: string, fileId: string, platform: 'tiktok' | 'douyin' | 'sample') {
-  const tempDir = '/tmp';
+  const tempDir = path.join(os.tmpdir(), 'tiktok_douyin_media');
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
+  }
+
+  // Strategy for Douyin: Try ByteDance Acrawler & RENDER_DATA Direct Video Extractor first
+  if (platform === 'douyin') {
+    try {
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+      const res1 = await fetch(cleanUrl, { headers: { 'User-Agent': ua } });
+      const html1 = await res1.text();
+      const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
+      const nonceMatch = cookies1.join('; ').match(/__ac_nonce=([^;]+)/);
+      if (nonceMatch) {
+        const nonce = nonceMatch[1];
+        const scripts = html1.match(/<script>([\s\S]*?)<\/script>/g) || [];
+        if (scripts.length > 0) {
+          const s0 = scripts[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
+          const sandbox = {
+            window: {},
+            navigator: { userAgent: ua, appVersion: '5.0 (Windows NT 10.0; Win64; x64)', platform: 'Win32', plugins: [] },
+            document: { referrer: 'https://www.douyin.com/', cookie: '__ac_nonce=' + nonce, getElementsByTagName: () => [], createElement: () => ({ setAttribute: () => {} }) },
+            location: { protocol: 'https:', href: cleanUrl, reload: () => {} },
+            sessionStorage: { setItem: () => {}, getItem: () => null },
+            localStorage: { setItem: () => {}, getItem: () => null },
+            performance: { timing: { navigationStart: Date.now() } },
+            console: { log: () => {}, warn: () => {}, error: () => {} },
+            setTimeout: setTimeout,
+          };
+          sandbox.window = sandbox;
+          (sandbox as any).global = sandbox;
+          (sandbox as any).self = sandbox;
+
+          const ctx = vm.createContext(sandbox);
+          vm.runInContext(s0, ctx);
+          if ((sandbox as any).byted_acrawler) {
+            (sandbox as any).byted_acrawler.init({ aid: 99999999, dfp: 0 });
+            const signature = (sandbox as any).byted_acrawler.sign('', nonce);
+            if (signature) {
+              const cookieHeader = `__ac_nonce=${nonce}; __ac_signature=${signature};`;
+              const pageRes = await fetch(cleanUrl, {
+                headers: { 'User-Agent': ua, 'Cookie': cookieHeader, 'Referer': 'https://www.douyin.com/' }
+              });
+              const pageHtml = await pageRes.text();
+              const renderDataMatch = pageHtml.match(/<script id=\"RENDER_DATA\"[^>]*>(.*?)<\/script>/);
+              if (renderDataMatch) {
+                const rawData = decodeURIComponent(renderDataMatch[1]);
+                const parsed = JSON.parse(rawData);
+                const modalMatch = cleanUrl.match(/modal_id=(\d+)/) || cleanUrl.match(/video\/(\d+)/);
+                const targetAwemeId = modalMatch ? modalMatch[1] : '';
+
+                function findAweme(obj: any): any {
+                  if (!obj || typeof obj !== 'object') return null;
+                  if (targetAwemeId && (obj.awemeId === targetAwemeId || obj.aweme_id === targetAwemeId)) return obj;
+                  if (obj.video && (obj.desc || obj.itemTitle)) return obj;
+                  for (const k of Object.keys(obj)) {
+                    const found = findAweme(obj[k]);
+                    if (found) return found;
+                  }
+                  return null;
+                }
+
+                const item = findAweme(parsed);
+                if (item && item.video) {
+                  const title = item.desc || item.itemTitle || 'Douyin Video';
+                  const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
+                  const duration = Math.round((item.video.duration || 30000) / 1000);
+                  let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
+                  if (!videoStreamUrl && Array.isArray(item.video.playApiList)) videoStreamUrl = item.video.playApiList[0];
+
+                  if (videoStreamUrl) {
+                    const targetFilePath = path.join(tempDir, `${fileId}.mp4`);
+                    const streamRes = await fetch(videoStreamUrl, {
+                      headers: { 'User-Agent': ua, 'Referer': 'https://www.douyin.com/' }
+                    });
+                    if (streamRes.ok) {
+                      const buffer = Buffer.from(await streamRes.arrayBuffer());
+                      if (buffer.length > 5000) {
+                        fs.writeFileSync(targetFilePath, buffer);
+                        return { filePath: targetFilePath, mimeType: 'video/mp4', title, author, duration, platform: 'douyin' as const };
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Douyin Acrawler Serverless Error]:', e);
+    }
   }
 
   // Strategy 1: TikWM API (prioritize full MP4 video stream)
@@ -283,12 +377,13 @@ export default async function handler(req: any, res: any) {
           toneAndStyle: 'Chia sẻ kinh nghiệm làm đẹp, tự tin, cuốn hút',
           fullOriginalScript: '今天教大家一个三步去闭口的方法，真的超级有用！第一步先用温水洗脸打开毛孔。第二步厚涂水杨酸棉片湿敷三分钟。第三步一定要用修护精华锁住水分。坚持一周，皮肤细腻透亮！',
           fullVietnameseScript: 'Hôm nay mình sẽ chỉ cho mọi người phương pháp 3 bước trị mụn ẩn cực kỳ hiệu quả luôn nha! Bước 1: Rửa mặt bằng nước ấm để giãn nở lỗ chân lông. Bước 2: Dùng bông tẩy trang thấm Salicylic Acid đắp nhẹ trong 3 phút. Bước 3: Nhất định phải thoa serum phục hồi để khóa ẩm. Kiên trì 1 tuần, da sẽ mịn màng và căng bóng rõ rệt!',
+          fullTranslatedScript: 'Hôm nay mình sẽ chỉ cho mọi người phương pháp 3 bước trị mụn ẩn cực kỳ hiệu quả luôn nha! Bước 1: Rửa mặt bằng nước ấm để giãn nở lỗ chân lông. Bước 2: Dùng bông tẩy trang thấm Salicylic Acid đắp nhẹ trong 3 phút. Bước 3: Nhất định phải thoa serum phục hồi để khóa ẩm. Kiên trì 1 tuần, da sẽ mịn màng và căng bóng rõ rệt!',
           segments: [
-            { timestamp: '00:00 - 00:05', startSec: 0, endSec: 5, originalText: '今天教大家一个三步去闭口的方法，真的超级有用！', vietnameseTranslation: 'Hôm nay mình sẽ chỉ cho mọi người phương pháp 3 bước trị mụn ẩn cực kỳ hiệu quả luôn nha!', speaker: 'Người hướng dẫn' },
-            { timestamp: '00:05 - 00:10', startSec: 5, endSec: 10, originalText: '第一步先用温水洗脸打开毛孔。', vietnameseTranslation: 'Bước 1: Rửa mặt bằng nước ấm để giãn nở lỗ chân lông.', speaker: 'Người hướng dẫn' },
-            { timestamp: '00:10 - 00:16', startSec: 10, endSec: 16, originalText: '第二步厚涂水杨酸棉片湿敷三分钟。', vietnameseTranslation: 'Bước 2: Dùng bông tẩy trang thấm Salicylic Acid đắp nhẹ trong 3 phút.', speaker: 'Người hướng dẫn' },
-            { timestamp: '00:16 - 00:23', startSec: 16, endSec: 23, originalText: '第三步一定要用修护精华锁住水分。', vietnameseTranslation: 'Bước 3: Nhất định phải thoa serum phục hồi để khóa ẩm.', speaker: 'Người hướng dẫn' },
-            { timestamp: '00:23 - 00:28', startSec: 23, endSec: 28, originalText: '坚持一周，皮肤细腻透亮！', vietnameseTranslation: 'Kiên trì 1 tuần, da sẽ mịn màng và căng bóng rõ rệt!', speaker: 'Người hướng dẫn' },
+            { id: 'seg_1', timestamp: '00:00 - 00:05', startSec: 0, endSec: 5, originalText: '今天教大家一个三步去闭口的方法，真的超级有用！', vietnameseTranslation: 'Hôm nay mình sẽ chỉ cho mọi người phương pháp 3 bước trị mụn ẩn cực kỳ hiệu quả luôn nha!', translatedText: 'Hôm nay mình sẽ chỉ cho mọi người phương pháp 3 bước trị mụn ẩn cực kỳ hiệu quả luôn nha!', speaker: 'Người hướng dẫn' },
+            { id: 'seg_2', timestamp: '00:05 - 00:10', startSec: 5, endSec: 10, originalText: '第一步先用温水洗脸打开毛孔。', vietnameseTranslation: 'Bước 1: Rửa mặt bằng nước ấm để giãn nở lỗ chân lông.', translatedText: 'Bước 1: Rửa mặt bằng nước ấm để giãn nở lỗ chân lông.', speaker: 'Người hướng dẫn' },
+            { id: 'seg_3', timestamp: '00:10 - 00:16', startSec: 10, endSec: 16, originalText: '第二步厚涂水杨酸棉片湿敷三分钟。', vietnameseTranslation: 'Bước 2: Dùng bông tẩy trang thấm Salicylic Acid đắp nhẹ trong 3 phút.', translatedText: 'Bước 2: Dùng bông tẩy trang thấm Salicylic Acid đắp nhẹ trong 3 phút.', speaker: 'Người hướng dẫn' },
+            { id: 'seg_4', timestamp: '00:16 - 00:23', startSec: 16, endSec: 23, originalText: '第三步一定要用修护精华锁住水分。', vietnameseTranslation: 'Bước 3: Nhất định phải thoa serum phục hồi để khóa ẩm.', translatedText: 'Bước 3: Nhất định phải thoa serum phục hồi để khóa ẩm.', speaker: 'Người hướng dẫn' },
+            { id: 'seg_5', timestamp: '00:23 - 00:28', startSec: 23, endSec: 28, originalText: '坚持一周，皮肤细腻透亮！', vietnameseTranslation: 'Kiên trì 1 tuần, da sẽ mịn màng và căng bóng rõ rệt!', translatedText: 'Kiên trì 1 tuần, da sẽ mịn màng và căng bóng rõ rệt!', speaker: 'Người hướng dẫn' },
           ],
           videoMetadata: {
             url: 'https://v.douyin.com/sample',
@@ -302,10 +397,21 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    if (!url || typeof url !== 'string') {
+    if (!url || typeof url !== 'string' || !url.trim()) {
       return res.status(400).json({
         success: false,
-        error: 'Vui lòng nhập đường link TikTok hoặc Douyin hợp lệ.',
+        error: 'Vui lòng cung cấp đường link video TikTok hoặc Douyin hợp lệ.',
+      });
+    }
+
+    const trimmedUrl = url.trim();
+    const hasHttp = /^https?:\/\//i.test(trimmedUrl);
+    const isSupported = /tiktok\.com|douyin\.com|iesdouyin\.com/i.test(trimmedUrl);
+
+    if (!hasHttp || !isSupported) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vui lòng nhập đúng đường link video từ TikTok hoặc Douyin (bắt đầu bằng https://...). Hệ thống không hỗ trợ tìm kiếm theo từ khóa.',
       });
     }
 
@@ -413,10 +519,31 @@ export default async function handler(req: any, res: any) {
 
     const parsedData = JSON.parse(geminiResponse.text);
 
+    const isVietnamese = parsedData.isVietnamese ?? (parsedData.sourceLanguage === 'vi' || parsedData.sourceLanguageName?.toLowerCase().includes('việt'));
+    const rawSegments = parsedData.segments || [];
+    const segments = rawSegments.map((seg: any, idx: number) => {
+      const translation = seg.translatedText || seg.vietnameseTranslation || (isVietnamese ? seg.originalText : undefined);
+      return {
+        id: seg.id || `seg_${idx + 1}`,
+        timestamp: seg.timestamp || `[00:${String(idx * 5).padStart(2, '0')} - 00:${String((idx + 1) * 5).padStart(2, '0')}]`,
+        startSec: typeof seg.startSec === 'number' ? seg.startSec : idx * 5,
+        endSec: typeof seg.endSec === 'number' ? seg.endSec : (idx + 1) * 5,
+        originalText: seg.originalText || '',
+        translatedText: translation,
+        vietnameseTranslation: translation,
+        speaker: seg.speaker,
+      };
+    });
+    const fullTranslation = parsedData.fullTranslatedScript || parsedData.fullVietnameseScript || (isVietnamese ? undefined : segments.map((s: any) => s.translatedText || s.originalText).join(' '));
+
     return res.status(200).json({
       success: true,
       data: {
         ...parsedData,
+        segments,
+        fullTranslatedScript: fullTranslation,
+        fullVietnameseScript: fullTranslation,
+        isVietnamese: Boolean(isVietnamese),
         id: `ext_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         videoMetadata: {
           url: cleanUrl,

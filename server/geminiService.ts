@@ -4,8 +4,11 @@ import { ExtractionResult, ScriptSegment } from '../src/types';
 
 function getAiClient(customApiKey?: string): GoogleGenAI {
   const key = customApiKey || process.env.GEMINI_API_KEY;
+  if (!key || !key.trim()) {
+    throw new Error('Chưa cấu hình GEMINI_API_KEY. Vui lòng bấm nút [API Key] trên thanh menu để nhập API Key hoặc kiểm tra file .env.');
+  }
   return new GoogleGenAI({
-    apiKey: key,
+    apiKey: key.trim(),
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -15,16 +18,14 @@ function getAiClient(customApiKey?: string): GoogleGenAI {
 }
 
 const CANDIDATE_MODELS = [
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview",
-    "gemini-pro-latest",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest"
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
 ];
 
 const SYSTEM_INSTRUCTION = `Bạn là chuyên gia bóc tách kịch bản audio/video ngắn hàng đầu (TikTok & Douyin).
@@ -108,8 +109,11 @@ export async function processMediaWithGemini({
    - startSec, endSec: thời gian tính bằng giây
    - originalText: lời thoại gốc nguyên văn
    - translatedText: bản dịch tiếng Việt (nếu video gốc là tiếng Trung hoặc tiếng nước ngoài; nếu video gốc đã là tiếng Việt thì để nguyên lời thoại tiếng Việt)
+   - speaker: tên nhân vật hoặc vai trò người nói (nếu nhận diện được)
 4. fullOriginalScript: Toàn bộ kịch bản gốc nối thành đoạn văn liền mạch.
-5. fullTranslatedScript: Toàn bộ bản dịch tiếng Việt nối liền mạch.`;
+5. fullTranslatedScript: Toàn bộ bản dịch tiếng Việt nối liền mạch.
+6. summary: Tóm tắt nội dung chính và thông điệp của video trong 1-2 câu ngắn gọn.
+7. toneAndStyle: Phong cách, giọng điệu của video (ví dụ: chia sẻ kinh nghiệm, review, hài hước, bán hàng...).`;
 
     const responseSchema = {
       type: Type.OBJECT,
@@ -125,6 +129,14 @@ export async function processMediaWithGemini({
         sourceLanguageName: {
           type: Type.STRING,
           description: "Tên ngôn ngữ gốc, ví dụ: 'Tiếng Việt', 'Tiếng Trung (Douyin)', 'Tiếng Anh'",
+        },
+        summary: {
+          type: Type.STRING,
+          description: "Tóm tắt nội dung chính của video",
+        },
+        toneAndStyle: {
+          type: Type.STRING,
+          description: "Phong cách và giọng điệu của video",
         },
         fullOriginalScript: {
           type: Type.STRING,
@@ -146,6 +158,7 @@ export async function processMediaWithGemini({
               endSec: { type: Type.NUMBER, description: "Giây kết thúc" },
               originalText: { type: Type.STRING, description: "Lời thoại gốc nguyên văn" },
               translatedText: { type: Type.STRING, description: "Bản dịch tiếng Việt (nếu tiếng Trung/ngoại ngữ)" },
+              speaker: { type: Type.STRING, description: "Vai trò hoặc tên người nói" },
             },
             required: ["timestamp", "startSec", "endSec", "originalText"],
           },
@@ -156,6 +169,7 @@ export async function processMediaWithGemini({
 
     let response: any;
     let lastError: any;
+    let successfulModel: string = CANDIDATE_MODELS[0];
 
     for (const modelName of CANDIDATE_MODELS) {
       console.log(`[Gemini Pipeline] Attempting with model: ${modelName}...`);
@@ -177,6 +191,7 @@ export async function processMediaWithGemini({
 
         if (response?.text) {
           console.log(`[Gemini Pipeline] Success with model: ${modelName}!`);
+          successfulModel = modelName;
           break;
         }
       } catch (err: any) {
@@ -206,16 +221,23 @@ export async function processMediaWithGemini({
       ];
     }
 
-    const segments: ScriptSegment[] = rawSegments.map((seg: any, idx: number) => ({
-      id: seg.id || `seg_${idx + 1}`,
-      timestamp: seg.timestamp || `[00:${String(idx * 5).padStart(2, '0')} - 00:${String((idx + 1) * 5).padStart(2, '0')}]`,
-      startSec: typeof seg.startSec === 'number' ? seg.startSec : idx * 5,
-      endSec: typeof seg.endSec === 'number' ? seg.endSec : (idx + 1) * 5,
-      originalText: seg.originalText || '',
-      translatedText: seg.translatedText || (parsedData.isVietnamese ? seg.originalText : undefined),
-    }));
-
     const isVietnamese = parsedData.isVietnamese ?? (parsedData.sourceLanguage === 'vi' || parsedData.sourceLanguageName?.toLowerCase().includes('việt'));
+
+    const segments: ScriptSegment[] = rawSegments.map((seg: any, idx: number) => {
+      const translation = seg.translatedText || seg.vietnameseTranslation || (isVietnamese ? seg.originalText : undefined);
+      return {
+        id: seg.id || `seg_${idx + 1}`,
+        timestamp: seg.timestamp || `[00:${String(idx * 5).padStart(2, '0')} - 00:${String((idx + 1) * 5).padStart(2, '0')}]`,
+        startSec: typeof seg.startSec === 'number' ? seg.startSec : idx * 5,
+        endSec: typeof seg.endSec === 'number' ? seg.endSec : (idx + 1) * 5,
+        originalText: seg.originalText || '',
+        translatedText: translation,
+        vietnameseTranslation: translation,
+        speaker: seg.speaker,
+      };
+    });
+
+    const fullTranslation = parsedData.fullTranslatedScript || parsedData.fullVietnameseScript || (isVietnamese ? undefined : segments.map(s => s.translatedText || s.originalText).join(' '));
 
     const result: ExtractionResult = {
       id: `ext_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -226,11 +248,15 @@ export async function processMediaWithGemini({
       },
       segments,
       fullOriginalScript: parsedData.fullOriginalScript || segments.map(s => s.originalText).join(' '),
-      fullTranslatedScript: parsedData.fullTranslatedScript || (isVietnamese ? undefined : segments.map(s => s.translatedText || s.originalText).join(' ')),
+      fullTranslatedScript: fullTranslation,
+      fullVietnameseScript: fullTranslation,
+      summary: parsedData.summary,
+      toneAndStyle: parsedData.toneAndStyle,
       sourceLanguage: parsedData.sourceLanguage || (isVietnamese ? 'vi' : 'zh'),
       sourceLanguageName: parsedData.sourceLanguageName || (isVietnamese ? 'Tiếng Việt' : 'Tiếng Trung (Douyin)'),
       isVietnamese: Boolean(isVietnamese),
       cleanedUpTempFiles: true,
+      modelUsed: successfulModel,
     };
 
     return result;

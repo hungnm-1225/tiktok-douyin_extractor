@@ -1,12 +1,14 @@
 import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import util from 'util';
+import vm from 'node:vm';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 
 const execPromise = util.promisify(exec);
-const TEMP_DIR = path.join('/tmp', 'tiktok_douyin_media');
+const TEMP_DIR = path.join(os.tmpdir(), 'tiktok_douyin_media');
 
 // Ensure temp directory exists
 if (!fs.existsSync(TEMP_DIR)) {
@@ -23,11 +25,19 @@ export interface DownloadedMedia {
 }
 
 /**
- * Extracts pure URL from messy share text
+ * Extracts pure URL from messy share text and normalizes special patterns (modal_id, etc.)
  */
 export function extractCleanUrl(text: string): string {
   const urlMatch = text.match(/https?:\/\/[^\s"'<>]+/);
-  return urlMatch ? urlMatch[0] : text.trim();
+  let clean = urlMatch ? urlMatch[0] : text.trim();
+
+  // Normalize Douyin modal_id link: e.g. https://www.douyin.com/jingxuan?modal_id=7696795427303181568
+  const douyinModalMatch = clean.match(/douyin\.com\/.*?modal_id=(\d+)/i);
+  if (douyinModalMatch && douyinModalMatch[1]) {
+    // Keep original or provide direct aweme link for flexibility
+    return clean;
+  }
+  return clean;
 }
 
 /**
@@ -45,18 +55,21 @@ export function identifyPlatform(url: string): 'tiktok' | 'douyin' | 'sample' {
 }
 
 /**
- * Ensures yt-dlp is available in /tmp/yt-dlp or system PATH
+ * Ensures yt-dlp is available in os.tmpdir() or system PATH
  */
 export async function ensureYtDlp(): Promise<string> {
-  const binaryPath = '/tmp/yt-dlp';
+  const isWindows = process.platform === 'win32';
+  const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+  const binaryPath = path.join(os.tmpdir(), binaryName);
   if (fs.existsSync(binaryPath)) {
     return binaryPath;
   }
   
   try {
-    const { stdout } = await execPromise('which yt-dlp');
+    const whichCmd = isWindows ? 'where yt-dlp' : 'which yt-dlp';
+    const { stdout } = await execPromise(whichCmd);
     if (stdout.trim()) {
-      return stdout.trim();
+      return stdout.trim().split(/\r?\n/)[0];
     }
   } catch {
     // not in PATH
@@ -64,11 +77,173 @@ export async function ensureYtDlp(): Promise<string> {
 
   // Download standalone binary
   try {
-    await execPromise('curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /tmp/yt-dlp && chmod +x /tmp/yt-dlp');
+    const downloadUrl = isWindows
+      ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+      : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+    const curlCmd = isWindows
+      ? `curl -L "${downloadUrl}" -o "${binaryPath}"`
+      : `curl -L "${downloadUrl}" -o "${binaryPath}" && chmod +x "${binaryPath}"`;
+    await execPromise(curlCmd);
     return binaryPath;
   } catch (err) {
     console.error('Failed to download yt-dlp:', err);
     throw new Error('yt-dlp is not available and could not be downloaded.');
+  }
+}
+
+/**
+ * Strategy 1: ByteDance Acrawler & RENDER_DATA Direct Video Extractor (Douyin)
+ * Solves Douyin WAF/anti-crawler challenge by calculating __ac_signature via byted_acrawler in a sandbox
+ */
+async function downloadViaDouyinRenderData(cleanUrl: string, fileId: string): Promise<DownloadedMedia | null> {
+  try {
+    console.log(`[Douyin Acrawler] Extracting video directly via RENDER_DATA from: ${cleanUrl}`);
+    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+    // Step 1: Initial request to obtain challenge script and __ac_nonce
+    const res1 = await fetch(cleanUrl, {
+      headers: { 'User-Agent': ua }
+    });
+    const html1 = await res1.text();
+    const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
+    const nonceMatch = cookies1.join('; ').match(/__ac_nonce=([^;]+)/);
+    if (!nonceMatch) {
+      console.warn('[Douyin Acrawler] No __ac_nonce returned');
+      return null;
+    }
+    const nonce = nonceMatch[1];
+
+    const scripts = html1.match(/<script>([\s\S]*?)<\/script>/g) || [];
+    if (scripts.length === 0) return null;
+    const s0 = scripts[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
+
+    // Step 2: Run byted_acrawler script in VM sandbox to calculate signature
+    const sandbox = {
+      window: {},
+      navigator: { userAgent: ua, appVersion: '5.0 (Windows NT 10.0; Win64; x64)', platform: 'Win32', plugins: [] },
+      document: { referrer: 'https://www.douyin.com/', cookie: '__ac_nonce=' + nonce, getElementsByTagName: () => [], createElement: () => ({ setAttribute: () => {} }) },
+      location: { protocol: 'https:', href: cleanUrl, reload: () => {} },
+      sessionStorage: { setItem: () => {}, getItem: () => null },
+      localStorage: { setItem: () => {}, getItem: () => null },
+      performance: { timing: { navigationStart: Date.now() } },
+      console: { log: () => {}, warn: () => {}, error: () => {} },
+      setTimeout: setTimeout,
+    };
+    sandbox.window = sandbox;
+    (sandbox as any).global = sandbox;
+    (sandbox as any).self = sandbox;
+
+    const ctx = vm.createContext(sandbox);
+    vm.runInContext(s0, ctx);
+
+    if (!(sandbox as any).byted_acrawler) {
+      console.warn('[Douyin Acrawler] byted_acrawler not found in sandbox');
+      return null;
+    }
+
+    (sandbox as any).byted_acrawler.init({ aid: 99999999, dfp: 0 });
+    const signature = (sandbox as any).byted_acrawler.sign('', nonce);
+    if (!signature) {
+      console.warn('[Douyin Acrawler] Signature generation failed');
+      return null;
+    }
+
+    // Step 3: Request page with authenticated challenge cookies
+    const cookieHeader = `__ac_nonce=${nonce}; __ac_signature=${signature};`;
+    const pageRes = await fetch(cleanUrl, {
+      headers: {
+        'User-Agent': ua,
+        'Cookie': cookieHeader,
+        'Referer': 'https://www.douyin.com/'
+      }
+    });
+    const pageHtml = await pageRes.text();
+
+    // Step 4: Parse RENDER_DATA
+    const renderDataMatch = pageHtml.match(/<script id=\"RENDER_DATA\"[^>]*>(.*?)<\/script>/);
+    if (!renderDataMatch) {
+      console.warn('[Douyin Acrawler] RENDER_DATA not found in response');
+      return null;
+    }
+
+    const rawData = decodeURIComponent(renderDataMatch[1]);
+    const parsed = JSON.parse(rawData);
+
+    // Modal ID check
+    const modalMatch = cleanUrl.match(/modal_id=(\d+)/) || cleanUrl.match(/video\/(\d+)/);
+    const targetAwemeId = modalMatch ? modalMatch[1] : '';
+
+    function findAweme(obj: any): any {
+      if (!obj || typeof obj !== 'object') return null;
+      if (targetAwemeId && (obj.awemeId === targetAwemeId || obj.aweme_id === targetAwemeId)) {
+        return obj;
+      }
+      if (obj.video && (obj.desc || obj.itemTitle)) {
+        return obj;
+      }
+      for (const k of Object.keys(obj)) {
+        const found = findAweme(obj[k]);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    const item = findAweme(parsed);
+    if (!item || !item.video) {
+      console.warn('[Douyin Acrawler] No video item found in RENDER_DATA');
+      return null;
+    }
+
+    const title = item.desc || item.itemTitle || 'Douyin Video';
+    const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
+    const duration = Math.round((item.video.duration || 30000) / 1000);
+
+    // Get MP4 video stream URL
+    let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
+    if (!videoStreamUrl && Array.isArray(item.video.playApiList)) {
+      videoStreamUrl = item.video.playApiList[0];
+    }
+
+    if (!videoStreamUrl) {
+      console.warn('[Douyin Acrawler] No video stream URL found in item.video');
+      return null;
+    }
+
+    console.log(`[Douyin Acrawler] Downloading full MP4 video for "${title}"...`);
+    const targetFilePath = path.join(TEMP_DIR, `${fileId}.mp4`);
+
+    const streamRes = await fetch(videoStreamUrl, {
+      headers: {
+        'User-Agent': ua,
+        'Referer': 'https://www.douyin.com/'
+      }
+    });
+
+    if (!streamRes.ok) {
+      console.warn(`[Douyin Acrawler] Stream fetch failed with status ${streamRes.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await streamRes.arrayBuffer());
+    if (buffer.length < 5000) {
+      console.warn(`[Douyin Acrawler] Downloaded buffer too small: ${buffer.length} bytes`);
+      return null;
+    }
+
+    fs.writeFileSync(targetFilePath, buffer);
+    console.log(`[Douyin Acrawler] Successfully downloaded ${buffer.length} bytes (~${(buffer.length / 1024 / 1024).toFixed(2)} MB) to ${targetFilePath}`);
+
+    return {
+      filePath: targetFilePath,
+      mimeType: 'video/mp4',
+      title,
+      author,
+      duration,
+      platform: 'douyin',
+    };
+  } catch (err: any) {
+    console.warn('[Douyin Acrawler Error]:', err.message);
+    return null;
   }
 }
 
@@ -278,10 +453,10 @@ async function downloadViaYtDlp(cleanUrl: string, fileId: string, platform: 'tik
     console.warn('yt-dlp metadata fetch skipped:', e);
   }
 
-  // Download audio format
+  // Download full video format (MP4) to preserve all spoken dialogue & on-screen audio
   try {
-    const downloadCmd = `"${ytDlpPath}" -x --audio-format mp3 --audio-quality 0 --no-playlist --user-agent "${browserUserAgent}" --referer "${referer}" -o "${outputTemplate}" "${cleanUrl}"`;
-    await execPromise(downloadCmd, { timeout: 45000 });
+    const downloadCmd = `"${ytDlpPath}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --no-playlist --user-agent "${browserUserAgent}" --referer "${referer}" -o "${outputTemplate}" "${cleanUrl}"`;
+    await execPromise(downloadCmd, { timeout: 60000 });
 
     const files = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(fileId));
     if (files.length === 0) {
@@ -290,7 +465,7 @@ async function downloadViaYtDlp(cleanUrl: string, fileId: string, platform: 'tik
 
     const downloadedFile = path.join(TEMP_DIR, files[0]);
     const ext = path.extname(downloadedFile).toLowerCase();
-    const mimeType = ext === '.mp3' ? 'audio/mp3' : ext === '.m4a' ? 'audio/m4a' : 'audio/mpeg';
+    const mimeType = ext === '.mp4' ? 'video/mp4' : ext === '.mp3' ? 'audio/mp3' : 'video/mp4';
 
     return {
       filePath: downloadedFile,
@@ -301,7 +476,23 @@ async function downloadViaYtDlp(cleanUrl: string, fileId: string, platform: 'tik
       platform,
     };
   } catch (err: any) {
-    console.error('yt-dlp download failed:', err);
+    console.warn('yt-dlp video download fallback to audio:', err.message);
+    try {
+      const audioCmd = `"${ytDlpPath}" -x --audio-format mp3 --audio-quality 0 --no-playlist --user-agent "${browserUserAgent}" --referer "${referer}" -o "${outputTemplate}" "${cleanUrl}"`;
+      await execPromise(audioCmd, { timeout: 45000 });
+      const files = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(fileId));
+      if (files.length > 0) {
+        const downloadedFile = path.join(TEMP_DIR, files[0]);
+        return {
+          filePath: downloadedFile,
+          mimeType: 'audio/mp3',
+          title,
+          author,
+          duration,
+          platform,
+        };
+      }
+    } catch {}
     throw new Error(
       `Không thể kết nối tải video từ liên kết này (${err.message || 'Hạn chế bot hoặc video riêng tư'}). ` +
       `Bạn có thể chọn thử một "Video Mẫu Viral" có sẵn trong thư viện hoặc kéo thả file âm thanh/video trực tiếp để bóc tách ngay!`
@@ -311,6 +502,8 @@ async function downloadViaYtDlp(cleanUrl: string, fileId: string, platform: 'tik
 
 /**
  * Main Download Function: Multi-strategy cascade
+ * Always prioritizes full VIDEO (MP4) to capture original dialogue, voiceovers & on-screen text,
+ * preventing accidental capture of TikTok/Douyin background music sounds.
  */
 export async function downloadMediaFromUrl(rawUrl: string): Promise<DownloadedMedia> {
   const cleanUrl = extractCleanUrl(rawUrl);
@@ -319,23 +512,91 @@ export async function downloadMediaFromUrl(rawUrl: string): Promise<DownloadedMe
 
   console.log(`[MediaExtractor] Processing ${platform.toUpperCase()} URL: ${cleanUrl}`);
 
-  // 1. Try TikWM API first (fastest, solves TikTok & Douyin bot blocks)
+  if (platform === 'douyin') {
+    // 1. Try ByteDance Acrawler & RENDER_DATA direct MP4 video extractor (handles modal_id, jingxuan, share links)
+    const douyinRenderResult = await downloadViaDouyinRenderData(cleanUrl, fileId);
+    if (douyinRenderResult) {
+      return douyinRenderResult;
+    }
+
+    // 2. Try Douyin Direct Web API
+    const douyinResult = await downloadViaDouyinApi(cleanUrl, fileId);
+    if (douyinResult) {
+      return douyinResult;
+    }
+
+    // 3. Try TikWM API
+    const tikWmResult = await downloadViaTikWmApi(cleanUrl, fileId, platform);
+    if (tikWmResult) {
+      return tikWmResult;
+    }
+
+    // 4. Fall back to yt-dlp
+    console.log('[MediaExtractor] Falling back to yt-dlp for Douyin...');
+    return await downloadViaYtDlp(cleanUrl, fileId, platform);
+  }
+
+  // TikTok platform
+  // 1. Try TikWM API first (fastest, extracts full MP4 video stream with audio track)
   const tikWmResult = await downloadViaTikWmApi(cleanUrl, fileId, platform);
   if (tikWmResult) {
     return tikWmResult;
   }
 
-  // 2. If Douyin, try Douyin Direct Web API
-  if (platform === 'douyin') {
-    const douyinResult = await downloadViaDouyinApi(cleanUrl, fileId);
-    if (douyinResult) {
-      return douyinResult;
+  // 2. Fall back to yt-dlp
+  console.log('[MediaExtractor] Falling back to yt-dlp for TikTok...');
+  return await downloadViaYtDlp(cleanUrl, fileId, platform);
+}
+
+/**
+ * Extracts audio track from large user-uploaded video files using ffmpeg
+ * Keeps payload lightweight while preserving full spoken dialogue
+ */
+export async function extractAudioIfVideoTooLarge(
+  inputFilePath: string,
+  maxSizeBytes: number = 15 * 1024 * 1024
+): Promise<{ filePath: string; mimeType: string }> {
+  try {
+    if (!fs.existsSync(inputFilePath)) {
+      return { filePath: inputFilePath, mimeType: 'video/mp4' };
     }
+
+    const stats = fs.statSync(inputFilePath);
+    const ext = path.extname(inputFilePath).toLowerCase();
+    const isVideo = ['.mp4', '.mov', '.mkv', '.webm', '.avi', '.flv'].includes(ext);
+
+    // If file is smaller than threshold or not a video, keep original
+    if (!isVideo || stats.size <= maxSizeBytes) {
+      return {
+        filePath: inputFilePath,
+        mimeType: isVideo ? 'video/mp4' : 'audio/mp3',
+      };
+    }
+
+    console.log(`[Upload Optimization] File is large video (${(stats.size / 1024 / 1024).toFixed(2)} MB), extracting MP3 audio via ffmpeg...`);
+    const outputAudioPath = inputFilePath.replace(/\.[^/.]+$/, '_extracted.mp3');
+
+    // Run ffmpeg to extract lightweight mp3 audio
+    const ffmpegCmd = `ffmpeg -y -i "${inputFilePath}" -vn -acodec libmp3lame -ab 128k -ar 44100 "${outputAudioPath}"`;
+    await execPromise(ffmpegCmd, { timeout: 60000 });
+
+    if (fs.existsSync(outputAudioPath) && fs.statSync(outputAudioPath).size > 1000) {
+      const audioStats = fs.statSync(outputAudioPath);
+      console.log(`[Upload Optimization] Successfully extracted audio: ${(audioStats.size / 1024 / 1024).toFixed(2)} MB (reduced from ${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+      // Delete heavy original video file
+      try {
+        fs.unlinkSync(inputFilePath);
+      } catch {}
+      return {
+        filePath: outputAudioPath,
+        mimeType: 'audio/mp3',
+      };
+    }
+  } catch (err: any) {
+    console.warn('[Upload Optimization] ffmpeg extraction skipped:', err.message);
   }
 
-  // 3. Fall back to optimized yt-dlp
-  console.log('[MediaExtractor] Falling back to yt-dlp with custom headers...');
-  return await downloadViaYtDlp(cleanUrl, fileId, platform);
+  return { filePath: inputFilePath, mimeType: 'video/mp4' };
 }
 
 /**
