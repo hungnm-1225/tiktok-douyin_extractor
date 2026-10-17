@@ -362,19 +362,7 @@ export async function exportDocxFile(
           new TextRun({ text: 'Tóm tắt nội dung: ', bold: true, color: '6B21A8' }),
           new TextRun({ text: result.summary, italics: true }),
         ],
-        spacing: { after: 100 },
-      })
-    );
-  }
-
-  if (result.toneAndStyle) {
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({ text: 'Phong cách / Giọng điệu: ', bold: true, color: '6B21A8' }),
-          new TextRun({ text: result.toneAndStyle }),
-        ],
-        spacing: { after: 200 },
+        spacing: { after: 150 },
       })
     );
   }

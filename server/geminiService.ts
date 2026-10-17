@@ -143,10 +143,9 @@ function getAiClient(customApiKey?: string): GoogleGenAI {
 }
 
 const CANDIDATE_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
   'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
   'gemini-3-flash',
   'gemini-3.1-flash-lite',
   'gemini-2.5-flash',
@@ -237,8 +236,7 @@ export async function processMediaWithGemini({
    - speaker: tên nhân vật hoặc vai trò người nói (nếu nhận diện được)
 4. fullOriginalScript: Toàn bộ kịch bản gốc nối thành đoạn văn liền mạch.
 5. fullTranslatedScript: Toàn bộ bản dịch tiếng Việt nối liền mạch.
-6. summary: Tóm tắt nội dung chính và thông điệp của video trong 1-2 câu ngắn gọn.
-7. toneAndStyle: Phong cách, giọng điệu của video (ví dụ: chia sẻ kinh nghiệm, review, hài hước, bán hàng...).`;
+6. summary: Tóm tắt nội dung chính và thông điệp của video trong 1-2 câu ngắn gọn.`;
 
     const responseSchema = {
       type: Type.OBJECT,
@@ -258,10 +256,6 @@ export async function processMediaWithGemini({
         summary: {
           type: Type.STRING,
           description: "Tóm tắt nội dung chính của video",
-        },
-        toneAndStyle: {
-          type: Type.STRING,
-          description: "Phong cách và giọng điệu của video",
         },
         fullOriginalScript: {
           type: Type.STRING,
@@ -376,7 +370,6 @@ export async function processMediaWithGemini({
       fullTranslatedScript: fullTranslation,
       fullVietnameseScript: fullTranslation,
       summary: parsedData.summary,
-      toneAndStyle: parsedData.toneAndStyle,
       sourceLanguage: parsedData.sourceLanguage || (isVietnamese ? 'vi' : 'zh'),
       sourceLanguageName: parsedData.sourceLanguageName || (isVietnamese ? 'Tiếng Việt' : 'Tiếng Trung (Douyin)'),
       isVietnamese: Boolean(isVietnamese),

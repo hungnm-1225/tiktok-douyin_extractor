@@ -13,10 +13,9 @@ export const config = {
 };
 
 const CANDIDATE_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
   'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
   'gemini-3-flash',
   'gemini-3.1-flash-lite',
   'gemini-2.5-flash',
@@ -180,10 +179,6 @@ const EXTRACTION_SCHEMA = {
     summary: {
       type: Type.STRING,
       description: 'Tóm tắt nội dung chính và thông điệp của video trong 1-2 câu',
-    },
-    toneAndStyle: {
-      type: Type.STRING,
-      description: 'Phong cách, giọng điệu (hài hước, review, tâm sự, bán hàng...)',
     },
     segments: {
       type: Type.ARRAY,

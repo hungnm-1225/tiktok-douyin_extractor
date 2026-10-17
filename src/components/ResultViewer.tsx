@@ -258,92 +258,124 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
             </div>
           </div>
 
-          {/* Video Summary & Tone Card */}
-          {(result.summary || result.toneAndStyle) && (
+          {/* Video Summary Card */}
+          {result.summary && (
             <div className="p-4 rounded-2xl bg-gradient-to-r from-pink-50/70 via-purple-50/60 to-indigo-50/60 border border-pink-100/80 space-y-2 mt-1">
-              {result.summary && (
-                <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-                  <span className="font-bold text-purple-900">💡 Tóm tắt nội dung: </span>
-                  <span className="italic">{result.summary}</span>
-                </div>
-              )}
-              {result.toneAndStyle && (
-                <div className="text-xs text-slate-600 flex items-center gap-1.5 flex-wrap pt-0.5">
-                  <span className="font-bold text-pink-700">🎭 Phong cách:</span>
-                  <span className="px-2.5 py-0.5 rounded-full bg-white text-pink-800 font-semibold border border-pink-200 shadow-2xs">
-                    {result.toneAndStyle}
-                  </span>
-                </div>
-              )}
+              <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                <span className="font-bold text-purple-900">💡 Tóm tắt nội dung: </span>
+                <span className="italic">{result.summary}</span>
+              </div>
             </div>
           )}
+        </div>
+      </div>
 
-          {/* Action Toolbar: Quick Copy + Compact Download Dropdown */}
-          <div className="flex items-center flex-wrap gap-2.5 pt-2 border-t border-pink-50">
-            {/* 1. Quick Copy Button */}
-            {isVietnamese ? (
-              <button
-                id="copy-vi-btn"
-                type="button"
-                onClick={() => handleCopy('vietnamese')}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
-              >
-                {copiedType === 'vietnamese' ? (
-                  <>
-                    <Check className="h-4 w-4" />
-                    <span>Đã Copy Kịch Bản!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-4 w-4" />
-                    <span>Sao Chép Kịch Bản</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <button
-                id="copy-translated-vi-btn"
-                type="button"
-                onClick={() => handleCopy('vietnamese')}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
-              >
-                {copiedType === 'vietnamese' ? (
-                  <>
-                    <Check className="h-4 w-4" />
-                    <span>Đã Copy Tiếng Việt!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-4 w-4" />
-                    <span>Copy Bản Dịch Tiếng Việt</span>
-                  </>
-                )}
-              </button>
-            )}
+      {/* CARD 1.5: Custom Pastel Media Player for Video/Audio Verification */}
+      {mediaSrc && (
+        <div id="media-player-section" className="space-y-2.5">
+          <div className="flex items-center justify-between px-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+              <Video className="h-4 w-4 text-pink-500" />
+              <span>Khung Media Đối Chiếu</span>
+            </div>
 
-            {/* Quick Copy for Foreign video: Copy Chinese or Bilingual */}
-            {!isVietnamese && (
-              <>
+            <button
+              type="button"
+              onClick={() => setIsPlayerVisible(!isPlayerVisible)}
+              className="inline-flex items-center gap-1 text-xs font-semibold text-purple-700 hover:text-purple-900 px-2.5 py-1 rounded-lg hover:bg-pink-50 transition-colors cursor-pointer"
+            >
+              {isPlayerVisible ? <EyeOff className="h-3.5 w-3.5 text-pink-500" /> : <Eye className="h-3.5 w-3.5 text-pink-500" />}
+              <span>{isPlayerVisible ? 'Thu gọn media' : 'Mở rộng media'}</span>
+            </button>
+          </div>
+
+          {isPlayerVisible && (
+            <CustomMediaPlayer
+              ref={playerRef}
+              src={mediaSrc}
+              title={result.videoMetadata.title}
+              platform={result.videoMetadata.platform}
+              duration={result.videoMetadata.duration}
+              coverImage={result.videoMetadata.coverImage}
+            />
+          )}
+        </div>
+      )}
+
+      {/* CARD 2: UNIFIED SCRIPT CONTAINER (Toolbar & Script Data in ONE coherent card) */}
+      <div className="bg-white rounded-3xl border border-pink-100/90 pastel-shadow overflow-hidden">
+        
+        {/* Integrated Header: Action Buttons on top, then View Tabs & Search below */}
+        <div className="bg-[#FFF9FB] p-4 sm:p-5 border-b border-pink-100/80 space-y-3.5">
+          
+          {/* Row 1: Action Toolbar directly connected to Script */}
+          <div className="flex items-center justify-between gap-3 flex-wrap pb-3 border-b border-pink-100/70">
+            <div className="flex items-center flex-wrap gap-2">
+              {/* 1. Main Copy Button */}
+              {isVietnamese ? (
                 <button
-                  id="copy-chinese-btn"
+                  id="copy-vi-btn"
                   type="button"
-                  onClick={() => handleCopy('chinese')}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs transition-all border border-rose-200 cursor-pointer"
+                  onClick={() => handleCopy('vietnamese')}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
                 >
-                  {copiedType === 'chinese' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-rose-600" />}
-                  <span>Copy Gốc Tiếng Trung</span>
+                  {copiedType === 'vietnamese' ? (
+                    <>
+                      <Check className="h-4 w-4" />
+                      <span>Đã sao chép!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4" />
+                      <span>Sao Chép</span>
+                    </>
+                  )}
                 </button>
+              ) : (
                 <button
-                  id="copy-bilingual-btn"
+                  id="copy-translated-vi-btn"
                   type="button"
-                  onClick={() => handleCopy('bilingual')}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-xs transition-all border border-purple-200 cursor-pointer"
+                  onClick={() => handleCopy('vietnamese')}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
                 >
-                  {copiedType === 'bilingual' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-purple-600" />}
-                  <span>Copy Song Ngữ</span>
+                  {copiedType === 'vietnamese' ? (
+                    <>
+                      <Check className="h-4 w-4" />
+                      <span>Đã sao chép!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4" />
+                      <span>Sao Chép</span>
+                    </>
+                  )}
                 </button>
-              </>
-            )}
+              )}
+
+              {/* Quick Copy for Foreign video: Copy Chinese or Bilingual */}
+              {!isVietnamese && (
+                <>
+                  <button
+                    id="copy-chinese-btn"
+                    type="button"
+                    onClick={() => handleCopy('chinese')}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs transition-all border border-rose-200 cursor-pointer"
+                  >
+                    {copiedType === 'chinese' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-rose-600" />}
+                    <span>Tiếng Trung Gốc</span>
+                  </button>
+                  <button
+                    id="copy-bilingual-btn"
+                    type="button"
+                    onClick={() => handleCopy('bilingual')}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-xs transition-all border border-purple-200 cursor-pointer"
+                  >
+                    {copiedType === 'bilingual' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-purple-600" />}
+                    <span>Song Ngữ</span>
+                  </button>
+                </>
+              )}
+            </div>
 
             {/* 2. Compact Download Dropdown Button */}
             <div className="relative" ref={dropdownRef}>
@@ -351,10 +383,10 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                 id="download-dropdown-btn"
                 type="button"
                 onClick={() => setIsDownloadDropdownOpen((prev) => !prev)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-100 via-purple-100 to-indigo-100 hover:from-pink-200 hover:via-purple-200 hover:to-indigo-200 text-purple-950 font-bold text-xs sm:text-sm border border-purple-200/80 shadow-xs transition-all active:scale-95 cursor-pointer"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-pink-100 via-purple-100 to-indigo-100 hover:from-pink-200 hover:via-purple-200 hover:to-indigo-200 text-purple-950 font-bold text-xs sm:text-sm border border-purple-200/80 shadow-xs transition-all active:scale-95 cursor-pointer"
               >
                 <Download className="h-4 w-4 text-purple-700" />
-                <span>Tải Xuống / Xuất File</span>
+                <span>Xuất File / Tải Xuống</span>
                 <ChevronDown className={`h-4 w-4 text-purple-700 transition-transform duration-200 ${isDownloadDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -362,7 +394,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               {isDownloadDropdownOpen && (
                 <div
                   id="download-dropdown-menu"
-                  className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-72 bg-white rounded-2xl p-2 border border-pink-100 shadow-xl shadow-purple-900/10 z-30 space-y-1 animate-in fade-in zoom-in-95 duration-150"
+                  className="absolute right-0 mt-2 w-72 bg-white rounded-2xl p-2 border border-pink-100 shadow-xl shadow-purple-900/10 z-30 space-y-1 animate-in fade-in zoom-in-95 duration-150"
                 >
                   {/* Option 1: Word .DOCX */}
                   <button
@@ -425,7 +457,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                       </div>
                       <div>
                         <div className="text-xs font-bold text-pink-700">Tải Video Gốc (MP4)</div>
-                        <div className="text-[11px] text-slate-400">Video chất lượng cao (Douyin không logo)</div>
+                        <div className="text-[11px] text-slate-400">Video chất lượng cao gốc</div>
                       </div>
                     </a>
                   )}
@@ -433,52 +465,11 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               )}
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* CARD 1.5: Custom Pastel Media Player for Video/Audio Verification */}
-      {mediaSrc && (
-        <div id="media-player-section" className="space-y-2.5">
-          <div className="flex items-center justify-between px-2">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-              <Video className="h-4 w-4 text-pink-500" />
-              <span>Khung Video Đối Chiếu Trực Quan</span>
-              <span className="text-[11px] font-normal text-slate-400 hidden sm:inline">
-                (Bấm vào mốc thời gian trong kịch bản để video tự động nhảy đến đúng giây đó)
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsPlayerVisible(!isPlayerVisible)}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-purple-700 hover:text-purple-900 px-2.5 py-1 rounded-lg hover:bg-pink-50 transition-colors cursor-pointer"
-            >
-              {isPlayerVisible ? <EyeOff className="h-3.5 w-3.5 text-pink-500" /> : <Eye className="h-3.5 w-3.5 text-pink-500" />}
-              <span>{isPlayerVisible ? 'Thu gọn video' : 'Mở rộng video'}</span>
-            </button>
-          </div>
-
-          {isPlayerVisible && (
-            <CustomMediaPlayer
-              ref={playerRef}
-              src={mediaSrc}
-              title={result.videoMetadata.title}
-              platform={result.videoMetadata.platform}
-              duration={result.videoMetadata.duration}
-              coverImage={result.videoMetadata.coverImage}
-            />
-          )}
-        </div>
-      )}
-
-      {/* CARD 2: UNIFIED SCRIPT CONTAINER (Tabs & Script Data in ONE coherent card) */}
-      <div className="bg-white rounded-3xl border border-pink-100/90 pastel-shadow overflow-hidden">
-        
-        {/* Integrated Tabs Header - Directly connected to script data */}
-        <div className="bg-[#FFF9FB] p-4 sm:p-5 border-b border-pink-100/80 space-y-3">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Row 2: Tabs Switcher (Clean, concise) & Search */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-0.5">
             
-            {/* View Mode Switcher: Timestamps vs Fulltext */}
+            {/* View Mode Switcher: Mốc Thời Gian vs Đoạn Văn Liền Mạch */}
             <div className="flex items-center p-1 bg-white rounded-2xl border border-pink-200/60 shadow-xs flex-wrap gap-1">
               <button
                 type="button"
@@ -490,7 +481,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                 }`}
               >
                 <Clock className="h-3.5 w-3.5" />
-                <span>Theo Mốc Thời Gian (Timestamp)</span>
+                <span>Mốc Thời Gian</span>
               </button>
               
               <button
@@ -503,7 +494,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                 }`}
               >
                 <AlignLeft className="h-3.5 w-3.5" />
-                <span>Đoạn Văn Liền Mạch (Tách Người Nói)</span>
+                <span>Đoạn Văn Liền Mạch</span>
               </button>
             </div>
 

@@ -198,40 +198,158 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
         onMouseLeave={() => isPlaying && setShowControls(false)}
         className="relative bg-white rounded-3xl overflow-hidden border border-pink-200/90 pastel-shadow group select-none transition-all"
       >
-        {/* Top Mini Header */}
-        <div className="px-4 py-2.5 bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 border-b border-pink-100 flex items-center justify-between text-xs text-slate-600">
-          <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-pink-400 animate-pulse"></span>
-            <span className="font-bold text-slate-700 flex items-center gap-1">
-              <Sparkles className="h-3.5 w-3.5 text-pink-500" />
-              <span>Trình Phát Video / Audio Gốc</span>
-            </span>
-          </div>
+        {isAudioOnly ? (
+          /* ============================================================== */
+          /* DEDICATED CUTE PASTEL AUDIO PLAYER (NO BLACK SCREEN)            */
+          /* ============================================================== */
+          <div className="p-4 sm:p-5 bg-gradient-to-r from-pink-50/90 via-purple-50/80 to-indigo-50/80 space-y-3.5">
+            <audio ref={mediaRef as any} src={src} preload="metadata" />
 
-          <div className="text-[11px] text-purple-700 font-semibold bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-100">
-            {platform === 'douyin' ? 'Douyin (抖音)' : platform === 'tiktok' ? 'TikTok' : 'Media'}
-          </div>
-        </div>
-
-        {/* Media Viewing Screen */}
-        <div 
-          className="relative bg-slate-950 flex items-center justify-center cursor-pointer min-h-[220px] sm:min-h-[340px] max-h-[480px] overflow-hidden"
-          onClick={togglePlay}
-        >
-          {isAudioOnly ? (
-            /* Audio visualization cute screen */
-            <div className="w-full h-48 sm:h-64 flex flex-col items-center justify-center bg-gradient-to-b from-pink-900/40 via-purple-900/40 to-slate-950 text-white space-y-4 p-6">
-              <div className={`h-20 w-20 rounded-full bg-gradient-to-tr from-pink-300 via-purple-300 to-indigo-300 flex items-center justify-center shadow-lg shadow-pink-500/20 text-purple-950 ${isPlaying ? 'animate-spin-slow' : ''}`}>
-                <Music className="h-9 w-9 text-purple-900" />
+            {/* Audio Header Row */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div
+                  className={`h-11 w-11 rounded-2xl bg-gradient-to-tr from-pink-300 via-purple-300 to-indigo-300 text-purple-900 flex items-center justify-center shadow-md shadow-pink-200/60 shrink-0 ${
+                    isPlaying ? 'animate-spin-slow' : ''
+                  }`}
+                >
+                  <Music className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
+                      Bản Ghi Âm Thanh
+                    </span>
+                    <span className="text-[11px] text-slate-400">Audio Track</span>
+                  </div>
+                  <h4 className="text-xs sm:text-sm font-bold text-slate-800 truncate mt-0.5 max-w-sm sm:max-w-md">
+                    {title || 'Tệp âm thanh'}
+                  </h4>
+                </div>
               </div>
-              <p className="text-xs sm:text-sm font-semibold text-pink-200 text-center max-w-md line-clamp-1">
-                {title || 'Bản ghi âm thanh kịch bản'}
-              </p>
-              <audio ref={mediaRef as any} src={src} preload="metadata" />
+
+              {/* Animated Waveform Visualizer Bars when Playing */}
+              <div className="flex items-end gap-1 h-6 shrink-0 px-2">
+                {[40, 75, 55, 90, 60, 85, 45, 100, 70, 50].map((h, i) => (
+                  <span
+                    key={i}
+                    className={`w-1 rounded-full bg-gradient-to-t from-pink-400 to-purple-500 transition-all duration-300 ${
+                      isPlaying ? 'animate-pulse' : 'opacity-40'
+                    }`}
+                    style={{
+                      height: isPlaying ? `${Math.max(20, (h * (i % 2 === 0 ? 1 : 0.7)))}%` : '25%',
+                      animationDelay: `${i * 100}ms`,
+                    }}
+                  />
+                ))}
+              </div>
             </div>
-          ) : (
-            /* Full video screen (Without native controls) */
-            <>
+
+            {/* Custom Pastel Progress / Seek Bar */}
+            <div
+              ref={progressRef}
+              onClick={handleProgressClick}
+              className="group/seek relative w-full h-2.5 bg-pink-200/60 rounded-full cursor-pointer overflow-visible flex items-center"
+            >
+              <div
+                className="h-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 rounded-full relative transition-all"
+                style={{ width: `${progressPercentage}%` }}
+              >
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3.5 w-3.5 bg-white border-2 border-pink-500 rounded-full shadow-md shadow-pink-300 group-hover/seek:scale-125 transition-transform" />
+              </div>
+            </div>
+
+            {/* Audio Controller Buttons Row */}
+            <div className="flex items-center justify-between gap-3 text-slate-700 flex-wrap pt-0.5">
+              <div className="flex items-center gap-2">
+                {/* Play/Pause */}
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  className="h-9 w-9 rounded-xl bg-gradient-to-tr from-pink-400 to-purple-500 hover:from-pink-500 hover:to-purple-600 text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xs cursor-pointer"
+                  title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
+                >
+                  {isPlaying ? <Pause className="h-4 w-4 fill-white" /> : <Play className="h-4 w-4 ml-0.5 fill-white" />}
+                </button>
+
+                {/* Rewind / Forward 5s */}
+                <button
+                  type="button"
+                  onClick={() => handleSeekBackward(5)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-white transition-colors cursor-pointer"
+                  title="Tua lại 5s"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSeekForward(5)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-white transition-colors cursor-pointer"
+                  title="Tua tới 5s"
+                >
+                  <RotateCw className="h-4 w-4" />
+                </button>
+
+                {/* Time Display */}
+                <div className="ml-1 font-mono text-xs font-bold text-slate-600 tracking-tight">
+                  <span className="text-purple-800">{formatTime(currentTime)}</span>
+                  <span className="text-slate-300 mx-1">/</span>
+                  <span>{formatTime(duration)}</span>
+                </div>
+              </div>
+
+              {/* Volume */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-white transition-colors cursor-pointer"
+                  title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+                >
+                  {isMuted || volume === 0 ? (
+                    <VolumeX className="h-4 w-4 text-rose-500" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 text-purple-700" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={isMuted ? 0 : volume}
+                  onChange={handleVolumeChange}
+                  className="w-16 sm:w-24 h-1.5 bg-pink-200/80 rounded-full accent-pink-500 cursor-pointer"
+                  title="Âm lượng"
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ============================================================== */
+          /* VIDEO PLAYER (WITH ACTUAL VIDEO SCREEN AND CONTROLS)           */
+          /* ============================================================== */
+          <>
+            {/* Top Mini Header */}
+            <div className="px-4 py-2 bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 border-b border-pink-100 flex items-center justify-between text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-pink-400 animate-pulse"></span>
+                <span className="font-bold text-slate-700 flex items-center gap-1">
+                  <VideoIcon className="h-3.5 w-3.5 text-pink-500" />
+                  <span>Trình Phát Video Đối Chiếu</span>
+                </span>
+              </div>
+
+              <div className="text-[11px] text-purple-700 font-semibold bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-100">
+                {platform === 'douyin' ? 'Douyin (抖音)' : platform === 'tiktok' ? 'TikTok' : 'Video'}
+              </div>
+            </div>
+
+            {/* Video Viewing Screen */}
+            <div 
+              className="relative bg-slate-950 flex items-center justify-center cursor-pointer min-h-[220px] sm:min-h-[340px] max-h-[480px] overflow-hidden"
+              onClick={togglePlay}
+            >
               <video
                 ref={mediaRef}
                 src={src}
@@ -249,119 +367,106 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
                   </div>
                 </div>
               )}
-            </>
-          )}
-        </div>
+            </div>
 
-        {/* Custom Pastel Controls Bar */}
-        <div 
-          className={`p-3 sm:p-4 bg-white/95 backdrop-blur-md border-t border-pink-100 transition-opacity duration-300 space-y-2.5 ${
-            showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Custom Pastel Progress / Seek Bar */}
-          <div
-            ref={progressRef}
-            onClick={handleProgressClick}
-            className="group/seek relative w-full h-2.5 bg-pink-100/90 rounded-full cursor-pointer overflow-visible flex items-center"
-          >
-            {/* Filled Progress Gradient */}
-            <div
-              className="h-full bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-500 rounded-full relative transition-all"
-              style={{ width: `${progressPercentage}%` }}
+            {/* Custom Pastel Controls Bar */}
+            <div 
+              className={`p-3 sm:p-4 bg-white/95 backdrop-blur-md border-t border-pink-100 transition-opacity duration-300 space-y-2.5 ${
+                showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
+              onClick={(e) => e.stopPropagation()}
             >
-              {/* Cute Scrubber Circle Knob */}
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-4 w-4 bg-white border-2 border-pink-500 rounded-full shadow-md shadow-pink-300 group-hover/seek:scale-125 transition-transform" />
-            </div>
-          </div>
-
-          {/* Buttons & Time Controller Row */}
-          <div className="flex items-center justify-between gap-3 text-slate-700 flex-wrap">
-            {/* Left buttons: Play/Pause, Rewind, Forward, Current/Total Time */}
-            <div className="flex items-center gap-2">
-              {/* Play/Pause Button */}
-              <button
-                type="button"
-                onClick={togglePlay}
-                className="h-9 w-9 rounded-xl bg-gradient-to-tr from-pink-400 to-purple-500 text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xs cursor-pointer"
-                title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
+              {/* Progress Seekbar */}
+              <div
+                ref={progressRef}
+                onClick={handleProgressClick}
+                className="group/seek relative w-full h-2.5 bg-pink-100/90 rounded-full cursor-pointer overflow-visible flex items-center"
               >
-                {isPlaying ? <Pause className="h-4 w-4 fill-white" /> : <Play className="h-4 w-4 ml-0.5 fill-white" />}
-              </button>
-
-              {/* Backward 5s */}
-              <button
-                type="button"
-                onClick={() => handleSeekBackward(5)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
-                title="Tua lại 5 giây"
-              >
-                <RotateCcw className="h-4 w-4" />
-              </button>
-
-              {/* Forward 5s */}
-              <button
-                type="button"
-                onClick={() => handleSeekForward(5)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
-                title="Tua tới 5 giây"
-              >
-                <RotateCw className="h-4 w-4" />
-              </button>
-
-              {/* Time Display */}
-              <div className="ml-1 font-mono text-xs font-bold text-slate-600 tracking-tight">
-                <span className="text-purple-700">{formatTime(currentTime)}</span>
-                <span className="text-slate-300 mx-1">/</span>
-                <span>{formatTime(duration)}</span>
-              </div>
-            </div>
-
-            {/* Right buttons: Volume Controller & Fullscreen */}
-            <div className="flex items-center gap-2.5">
-              {/* Volume & Mute */}
-              <div className="flex items-center gap-1.5 group/vol">
-                <button
-                  type="button"
-                  onClick={toggleMute}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
-                  title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+                <div
+                  className="h-full bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-500 rounded-full relative transition-all"
+                  style={{ width: `${progressPercentage}%` }}
                 >
-                  {isMuted || volume === 0 ? (
-                    <VolumeX className="h-4 w-4 text-rose-500" />
-                  ) : (
-                    <Volume2 className="h-4 w-4 text-purple-700" />
-                  )}
-                </button>
-
-                {/* Volume slider */}
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={isMuted ? 0 : volume}
-                  onChange={handleVolumeChange}
-                  className="w-16 sm:w-20 h-1.5 bg-pink-100 rounded-full accent-pink-500 cursor-pointer"
-                  title="Điều chỉnh âm lượng"
-                />
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-4 w-4 bg-white border-2 border-pink-500 rounded-full shadow-md shadow-pink-300 group-hover/seek:scale-125 transition-transform" />
+                </div>
               </div>
 
-              {/* Fullscreen Button (For video only) */}
-              {!isAudioOnly && (
-                <button
-                  type="button"
-                  onClick={toggleFullscreen}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
-                  title={isFullscreen ? 'Thu nhỏ' : 'Toàn màn hình'}
-                >
-                  {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
-                </button>
-              )}
+              {/* Buttons Row */}
+              <div className="flex items-center justify-between gap-3 text-slate-700 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    className="h-9 w-9 rounded-xl bg-gradient-to-tr from-pink-400 to-purple-500 text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xs cursor-pointer"
+                    title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
+                  >
+                    {isPlaying ? <Pause className="h-4 w-4 fill-white" /> : <Play className="h-4 w-4 ml-0.5 fill-white" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSeekBackward(5)}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
+                    title="Tua lại 5 giây"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSeekForward(5)}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
+                    title="Tua tới 5 giây"
+                  >
+                    <RotateCw className="h-4 w-4" />
+                  </button>
+
+                  <div className="ml-1 font-mono text-xs font-bold text-slate-600 tracking-tight">
+                    <span className="text-purple-700">{formatTime(currentTime)}</span>
+                    <span className="text-slate-300 mx-1">/</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={toggleMute}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
+                      title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+                    >
+                      {isMuted || volume === 0 ? (
+                        <VolumeX className="h-4 w-4 text-rose-500" />
+                      ) : (
+                        <Volume2 className="h-4 w-4 text-purple-700" />
+                      )}
+                    </button>
+
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={isMuted ? 0 : volume}
+                      onChange={handleVolumeChange}
+                      className="w-16 sm:w-20 h-1.5 bg-pink-100 rounded-full accent-pink-500 cursor-pointer"
+                      title="Âm lượng"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={toggleFullscreen}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-purple-700 hover:bg-pink-50 transition-colors cursor-pointer"
+                    title={isFullscreen ? 'Thu nhỏ' : 'Toàn màn hình'}
+                  >
+                    {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     );
   }

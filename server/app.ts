@@ -22,7 +22,7 @@ app.use(express.urlencoded({ extended: true, limit: '150mb' }));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    model: 'gemini-3.8-flash',
+    model: 'gemini-3.5-flash-lite',
     sdk: '@google/genai',
     hasApiKey: !!process.env.GEMINI_API_KEY,
     timestamp: new Date().toISOString(),
