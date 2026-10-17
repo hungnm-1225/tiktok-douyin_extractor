@@ -2,6 +2,131 @@ import { GoogleGenAI, Type } from '@google/genai';
 import fs from 'fs';
 import { ExtractionResult, ScriptSegment } from '../src/types';
 
+/**
+ * Safely parses Gemini JSON response with automated structural repair
+ * Prevents "Unterminated string in JSON" when output exceeds token limit or gets truncated
+ */
+export function safeParseGeminiJson(rawText: string): any {
+  if (!rawText || !rawText.trim()) {
+    throw new Error('Gemini trả về phản hồi rỗng.');
+  }
+
+  let text = rawText.trim();
+
+  // Strip markdown code fences if present (```json ... ```)
+  if (text.startsWith('```json')) {
+    text = text.substring(7);
+  } else if (text.startsWith('```')) {
+    text = text.substring(3);
+  }
+  if (text.endsWith('```')) {
+    text = text.substring(0, text.length - 3);
+  }
+  text = text.trim();
+
+  // 1. Try standard JSON.parse first
+  try {
+    return JSON.parse(text);
+  } catch (err: any) {
+    console.warn(`[JSON Repair] Initial parse failed (${err.message}). Attempting automated structure repair...`);
+  }
+
+  // 2. Repair truncated strings and unclosed brackets/braces
+  let repaired = text;
+
+  // Check if string is unclosed
+  let inString = false;
+  let isEscaped = false;
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+    if (ch === '\\' && inString) {
+      isEscaped = !isEscaped;
+    } else if (ch === '"' && !isEscaped) {
+      inString = !inString;
+    } else {
+      isEscaped = false;
+    }
+  }
+
+  if (inString) {
+    repaired += '"';
+  }
+
+  // Check and close open brackets and braces
+  const openStack: string[] = [];
+  inString = false;
+  isEscaped = false;
+
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+    if (ch === '\\' && inString) {
+      isEscaped = !isEscaped;
+    } else if (ch === '"' && !isEscaped) {
+      inString = !inString;
+    } else if (!inString) {
+      if (ch === '{' || ch === '[') {
+        openStack.push(ch);
+      } else if (ch === '}' && openStack[openStack.length - 1] === '{') {
+        openStack.pop();
+      } else if (ch === ']' && openStack[openStack.length - 1] === '[') {
+        openStack.pop();
+      }
+    } else {
+      isEscaped = false;
+    }
+  }
+
+  while (openStack.length > 0) {
+    const last = openStack.pop();
+    if (last === '{') repaired += '}';
+    else if (last === '[') repaired += ']';
+  }
+
+  try {
+    const parsed = JSON.parse(repaired);
+    console.log('[JSON Repair] Successfully repaired truncated JSON structure!');
+    return parsed;
+  } catch (repairErr: any) {
+    console.warn(`[JSON Repair] Structural repair failed (${repairErr.message}). Extracting valid segments via regex...`);
+  }
+
+  // 3. Fallback: Extract every complete segment object via Regex
+  const segments: any[] = [];
+  const segRegex = /\{\s*"(?:id|timestamp)"\s*:\s*"[^"]*"[^{}]*?"originalText"\s*:\s*"[^"]*"[^{}]*?\}/g;
+  let match;
+  while ((match = segRegex.exec(text)) !== null) {
+    try {
+      segments.push(JSON.parse(match[0]));
+    } catch {}
+  }
+
+  const isViMatch = text.match(/"isVietnamese"\s*:\s*(true|false)/i);
+  const isVietnamese = isViMatch ? isViMatch[1].toLowerCase() === 'true' : false;
+
+  const summaryMatch = text.match(/"summary"\s*:\s*"([^"]*)"/);
+  const summary = summaryMatch ? summaryMatch[1] : undefined;
+
+  const toneMatch = text.match(/"toneAndStyle"\s*:\s*"([^"]*)"/);
+  const toneAndStyle = toneMatch ? toneMatch[1] : undefined;
+
+  if (segments.length > 0) {
+    console.log(`[JSON Repair] Recovered ${segments.length} valid segments via regex recovery!`);
+    return {
+      isVietnamese,
+      sourceLanguageName: isVietnamese ? 'Tiếng Việt' : 'Tiếng Trung (Douyin)',
+      summary,
+      toneAndStyle,
+      segments,
+      fullOriginalScript: segments.map((s) => s.originalText || '').join(' '),
+      fullTranslatedScript: isVietnamese
+        ? undefined
+        : segments.map((s) => s.translatedText || s.originalText || '').join(' '),
+    };
+  }
+
+  throw new Error(`Không thể giải mã phản hồi JSON từ AI (Phản hồi bị ngắt quãng).`);
+}
+
 function getAiClient(customApiKey?: string): GoogleGenAI {
   const key = customApiKey || process.env.GEMINI_API_KEY;
   if (!key || !key.trim()) {
@@ -205,7 +330,7 @@ export async function processMediaWithGemini({
       throw lastError || new Error('Không thể kết nối Gemini AI. Vui lòng thử lại sau giây lát.');
     }
 
-    const parsedData = JSON.parse(response.text);
+    const parsedData = safeParseGeminiJson(response.text);
 
     let rawSegments = parsedData.segments || [];
     if (rawSegments.length === 0) {

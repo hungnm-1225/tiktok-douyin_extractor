@@ -19,6 +19,127 @@ const CANDIDATE_MODELS = [
   'gemini-2.5-flash-lite',
 ];
 
+export function safeParseGeminiJson(rawText: string): any {
+  if (!rawText || !rawText.trim()) {
+    throw new Error('Gemini trả về phản hồi rỗng.');
+  }
+
+  let text = rawText.trim();
+
+  // Strip markdown code fences if present (```json ... ```)
+  if (text.startsWith('```json')) {
+    text = text.substring(7);
+  } else if (text.startsWith('```')) {
+    text = text.substring(3);
+  }
+  if (text.endsWith('```')) {
+    text = text.substring(0, text.length - 3);
+  }
+  text = text.trim();
+
+  // 1. Try standard JSON.parse first
+  try {
+    return JSON.parse(text);
+  } catch (err: any) {
+    console.warn(`[JSON Repair] Initial parse failed (${err.message}). Attempting automated structure repair...`);
+  }
+
+  // 2. Repair truncated strings and unclosed brackets/braces
+  let repaired = text;
+
+  // Check if string is unclosed
+  let inString = false;
+  let isEscaped = false;
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+    if (ch === '\\' && inString) {
+      isEscaped = !isEscaped;
+    } else if (ch === '"' && !isEscaped) {
+      inString = !inString;
+    } else {
+      isEscaped = false;
+    }
+  }
+
+  if (inString) {
+    repaired += '"';
+  }
+
+  // Check and close open brackets and braces
+  const openStack: string[] = [];
+  inString = false;
+  isEscaped = false;
+
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i];
+    if (ch === '\\' && inString) {
+      isEscaped = !isEscaped;
+    } else if (ch === '"' && !isEscaped) {
+      inString = !inString;
+    } else if (!inString) {
+      if (ch === '{' || ch === '[') {
+        openStack.push(ch);
+      } else if (ch === '}' && openStack[openStack.length - 1] === '{') {
+        openStack.pop();
+      } else if (ch === ']' && openStack[openStack.length - 1] === '[') {
+        openStack.pop();
+      }
+    } else {
+      isEscaped = false;
+    }
+  }
+
+  while (openStack.length > 0) {
+    const last = openStack.pop();
+    if (last === '{') repaired += '}';
+    else if (last === '[') repaired += ']';
+  }
+
+  try {
+    const parsed = JSON.parse(repaired);
+    console.log('[JSON Repair] Successfully repaired truncated JSON structure!');
+    return parsed;
+  } catch (repairErr: any) {
+    console.warn(`[JSON Repair] Structural repair failed (${repairErr.message}). Extracting valid segments via regex...`);
+  }
+
+  // 3. Fallback: Extract every complete segment object via Regex
+  const segments: any[] = [];
+  const segRegex = /\{\s*"(?:id|timestamp)"\s*:\s*"[^"]*"[^{}]*?"originalText"\s*:\s*"[^"]*"[^{}]*?\}/g;
+  let match;
+  while ((match = segRegex.exec(text)) !== null) {
+    try {
+      segments.push(JSON.parse(match[0]));
+    } catch {}
+  }
+
+  const isViMatch = text.match(/"isVietnamese"\s*:\s*(true|false)/i);
+  const isVietnamese = isViMatch ? isViMatch[1].toLowerCase() === 'true' : false;
+
+  const summaryMatch = text.match(/"summary"\s*:\s*"([^"]*)"/);
+  const summary = summaryMatch ? summaryMatch[1] : undefined;
+
+  const toneMatch = text.match(/"toneAndStyle"\s*:\s*"([^"]*)"/);
+  const toneAndStyle = toneMatch ? toneMatch[1] : undefined;
+
+  if (segments.length > 0) {
+    console.log(`[JSON Repair] Recovered ${segments.length} valid segments via regex recovery!`);
+    return {
+      isVietnamese,
+      sourceLanguageName: isVietnamese ? 'Tiếng Việt' : 'Tiếng Trung (Douyin)',
+      summary,
+      toneAndStyle,
+      segments,
+      fullOriginalScript: segments.map((s) => s.originalText || '').join(' '),
+      fullTranslatedScript: isVietnamese
+        ? undefined
+        : segments.map((s) => s.translatedText || s.originalText || '').join(' '),
+    };
+  }
+
+  throw new Error(`Không thể giải mã phản hồi JSON từ AI (Phản hồi bị ngắt quãng).`);
+}
+
 const SYSTEM_INSTRUCTION = `Bạn là chuyên gia bóc tách kịch bản audio/video ngắn hàng đầu (TikTok & Douyin).
 Nhiệm vụ trọng tâm:
 1. Nghe và nhận diện chính xác ngôn ngữ của video (Tiếng Việt, Tiếng Trung, Tiếng Anh,...).
@@ -106,6 +227,23 @@ const EXTRACTION_SCHEMA = {
   ],
 };
 
+export type ExtractionErrorCode =
+  | 'VIDEO_UNAVAILABLE'
+  | 'WAF_CHALLENGE_BLOCKED'
+  | 'RATE_LIMIT'
+  | 'INVALID_URL'
+  | 'DOWNLOAD_STREAM_FAILED'
+  | 'AI_ERROR';
+
+export class VideoExtractionError extends Error {
+  code: ExtractionErrorCode;
+  constructor(code: ExtractionErrorCode, message: string) {
+    super(message);
+    this.name = 'VideoExtractionError';
+    this.code = code;
+  }
+}
+
 function extractCleanUrl(text: string): string {
   const urlMatch = text.match(/https?:\/\/[^\s"'<>]+/);
   return urlMatch ? urlMatch[0] : text.trim();
@@ -122,171 +260,301 @@ function identifyPlatform(url: string): 'tiktok' | 'douyin' | 'sample' {
   return 'sample';
 }
 
-async function downloadMedia(cleanUrl: string, fileId: string, platform: 'tiktok' | 'douyin' | 'sample') {
-  const tempDir = path.join(os.tmpdir(), 'tiktok_douyin_media');
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
+/**
+ * Resolves short links (e.g. v.douyin.com, vt.tiktok.com) and validates whether the video is still active.
+ * If Douyin/TikTok redirects to homepage (root), the video is deleted, private, or expired!
+ */
+async function resolveAndValidateUrl(rawUrl: string): Promise<{
+  finalUrl: string;
+  platform: 'tiktok' | 'douyin' | 'sample';
+  awemeId?: string;
+}> {
+  const cleanUrl = extractCleanUrl(rawUrl);
+  const platform = identifyPlatform(cleanUrl);
+
+  const isShortLink =
+    cleanUrl.includes('v.douyin.com') ||
+    cleanUrl.includes('vt.tiktok.com') ||
+    cleanUrl.includes('vm.tiktok.com');
+
+  let finalUrl = cleanUrl;
+
+  try {
+    const res = await fetch(cleanUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+      },
+    });
+
+    if (res.url) {
+      finalUrl = res.url;
+    }
+  } catch (err: any) {
+    console.warn('[URL Resolver Serverless] Network warning:', err.message);
   }
 
-  // Strategy for Douyin: Try ByteDance Acrawler & RENDER_DATA Direct Video Extractor first
-  if (platform === 'douyin') {
+  // Check if destination is redirected back to root homepage
+  const isDouyinRoot = /^https?:\/\/(www\.)?douyin\.com\/?(\?.*)?$/i.test(finalUrl);
+  const isTikTokRoot = /^https?:\/\/(www\.)?tiktok\.com\/?(\?.*)?$/i.test(finalUrl);
+
+  if ((isShortLink && (isDouyinRoot || isTikTokRoot)) || (!isShortLink && (isDouyinRoot || isTikTokRoot))) {
+    throw new VideoExtractionError(
+      'VIDEO_UNAVAILABLE',
+      'Video không khả dụng (Video này có thể đã bị tác giả xóa, cài đặt chế độ riêng tư hoặc đường link chia sẻ đã hết hạn).'
+    );
+  }
+
+  const awemeMatch =
+    finalUrl.match(/video\/(\d+)/i) ||
+    finalUrl.match(/modal_id=(\d+)/i) ||
+    finalUrl.match(/item_ids=(\d+)/i);
+  const awemeId = awemeMatch ? awemeMatch[1] : undefined;
+
+  return { finalUrl, platform, awemeId };
+}
+
+async function downloadViaDouyinRenderData(
+  targetUrl: string,
+  fileId: string,
+  tempDir: string,
+  awemeId?: string
+) {
+  const urlsToTry = [targetUrl];
+  if (awemeId) {
+    const canonicalModal = `https://www.douyin.com/jingxuan?modal_id=${awemeId}`;
+    const canonicalVideo = `https://www.douyin.com/video/${awemeId}`;
+    if (!urlsToTry.includes(canonicalModal)) urlsToTry.push(canonicalModal);
+    if (!urlsToTry.includes(canonicalVideo)) urlsToTry.push(canonicalVideo);
+  }
+
+  const ua =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+  for (const pageUrl of urlsToTry) {
     try {
-      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-      const res1 = await fetch(cleanUrl, { headers: { 'User-Agent': ua } });
+      const res1 = await fetch(pageUrl, {
+        headers: {
+          'User-Agent': ua,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+      });
       const html1 = await res1.text();
       const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
       const nonceMatch = cookies1.join('; ').match(/__ac_nonce=([^;]+)/);
-      if (nonceMatch) {
-        const nonce = nonceMatch[1];
-        const scripts = html1.match(/<script>([\s\S]*?)<\/script>/g) || [];
-        if (scripts.length > 0) {
-          const s0 = scripts[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
-          const sandbox = {
-            window: {},
-            navigator: { userAgent: ua, appVersion: '5.0 (Windows NT 10.0; Win64; x64)', platform: 'Win32', plugins: [] },
-            document: { referrer: 'https://www.douyin.com/', cookie: '__ac_nonce=' + nonce, getElementsByTagName: () => [], createElement: () => ({ setAttribute: () => {} }) },
-            location: { protocol: 'https:', href: cleanUrl, reload: () => {} },
-            sessionStorage: { setItem: () => {}, getItem: () => null },
-            localStorage: { setItem: () => {}, getItem: () => null },
-            performance: { timing: { navigationStart: Date.now() } },
-            console: { log: () => {}, warn: () => {}, error: () => {} },
-            setTimeout: setTimeout,
-          };
-          sandbox.window = sandbox;
-          (sandbox as any).global = sandbox;
-          (sandbox as any).self = sandbox;
+      if (!nonceMatch) continue;
+      const nonce = nonceMatch[1];
 
-          const ctx = vm.createContext(sandbox);
-          vm.runInContext(s0, ctx);
-          if ((sandbox as any).byted_acrawler) {
-            (sandbox as any).byted_acrawler.init({ aid: 99999999, dfp: 0 });
-            const signature = (sandbox as any).byted_acrawler.sign('', nonce);
-            if (signature) {
-              const cookieHeader = `__ac_nonce=${nonce}; __ac_signature=${signature};`;
-              const pageRes = await fetch(cleanUrl, {
-                headers: { 'User-Agent': ua, 'Cookie': cookieHeader, 'Referer': 'https://www.douyin.com/' }
-              });
-              const pageHtml = await pageRes.text();
-              const renderDataMatch = pageHtml.match(/<script id=\"RENDER_DATA\"[^>]*>(.*?)<\/script>/);
-              if (renderDataMatch) {
-                const rawData = decodeURIComponent(renderDataMatch[1]);
-                const parsed = JSON.parse(rawData);
-                const modalMatch = cleanUrl.match(/modal_id=(\d+)/) || cleanUrl.match(/video\/(\d+)/);
-                const targetAwemeId = modalMatch ? modalMatch[1] : '';
+      const scripts = html1.match(/<script>([\s\S]*?)<\/script>/g) || [];
+      if (scripts.length === 0) continue;
+      const s0 = scripts[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
 
-                function findAweme(obj: any): any {
-                  if (!obj || typeof obj !== 'object') return null;
-                  if (targetAwemeId && (obj.awemeId === targetAwemeId || obj.aweme_id === targetAwemeId)) return obj;
-                  if (obj.video && (obj.desc || obj.itemTitle)) return obj;
-                  for (const k of Object.keys(obj)) {
-                    const found = findAweme(obj[k]);
-                    if (found) return found;
-                  }
-                  return null;
-                }
+      const sandbox = {
+        window: {},
+        navigator: {
+          userAgent: ua,
+          appVersion: '5.0 (Windows NT 10.0; Win64; x64)',
+          platform: 'Win32',
+          plugins: [],
+        },
+        document: {
+          referrer: 'https://www.douyin.com/',
+          cookie: '__ac_nonce=' + nonce,
+          getElementsByTagName: () => [],
+          createElement: () => ({ setAttribute: () => {} }),
+        },
+        location: { protocol: 'https:', href: pageUrl, reload: () => {} },
+        sessionStorage: { setItem: () => {}, getItem: () => null },
+        localStorage: { setItem: () => {}, getItem: () => null },
+        performance: { timing: { navigationStart: Date.now() } },
+        console: { log: () => {}, warn: () => {}, error: () => {} },
+        setTimeout: setTimeout,
+      };
+      sandbox.window = sandbox;
+      (sandbox as any).global = sandbox;
+      (sandbox as any).self = sandbox;
 
-                const item = findAweme(parsed);
-                if (item && item.video) {
-                  const title = item.desc || item.itemTitle || 'Douyin Video';
-                  const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
-                  const duration = Math.round((item.video.duration || 30000) / 1000);
-                  let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
-                  if (!videoStreamUrl && Array.isArray(item.video.playApiList)) videoStreamUrl = item.video.playApiList[0];
+      const ctx = vm.createContext(sandbox);
+      vm.runInContext(s0, ctx);
 
-                  if (videoStreamUrl) {
-                    const targetFilePath = path.join(tempDir, `${fileId}.mp4`);
-                    const streamRes = await fetch(videoStreamUrl, {
-                      headers: { 'User-Agent': ua, 'Referer': 'https://www.douyin.com/' }
-                    });
-                    if (streamRes.ok) {
-                      const buffer = Buffer.from(await streamRes.arrayBuffer());
-                      if (buffer.length > 5000) {
-                        fs.writeFileSync(targetFilePath, buffer);
-                        return { filePath: targetFilePath, mimeType: 'video/mp4', title, author, duration, platform: 'douyin' as const };
-                      }
-                    }
-                  }
-                }
-              }
+      if (!(sandbox as any).byted_acrawler) continue;
+
+      (sandbox as any).byted_acrawler.init({ aid: 99999999, dfp: 0 });
+      const signature = (sandbox as any).byted_acrawler.sign('', nonce);
+      if (!signature) continue;
+
+      const cookieHeader = `__ac_nonce=${nonce}; __ac_signature=${signature};`;
+      const pageRes = await fetch(pageUrl, {
+        headers: {
+          'User-Agent': ua,
+          'Cookie': cookieHeader,
+          'Referer': 'https://www.douyin.com/',
+        },
+      });
+      const pageHtml = await pageRes.text();
+      const renderDataMatch = pageHtml.match(/<script id=\"RENDER_DATA\"[^>]*>(.*?)<\/script>/);
+      if (!renderDataMatch) continue;
+
+      const rawData = decodeURIComponent(renderDataMatch[1]);
+      const parsed = JSON.parse(rawData);
+
+      const modalMatch = pageUrl.match(/modal_id=(\d+)/) || pageUrl.match(/video\/(\d+)/);
+      const targetAwemeId = awemeId || (modalMatch ? modalMatch[1] : '');
+
+      function findAweme(obj: any): any {
+        if (!obj || typeof obj !== 'object') return null;
+        if (targetAwemeId && (obj.awemeId === targetAwemeId || obj.aweme_id === targetAwemeId)) return obj;
+        if (obj.video && (obj.desc || obj.itemTitle)) return obj;
+        for (const k of Object.keys(obj)) {
+          const found = findAweme(obj[k]);
+          if (found) return found;
+        }
+        return null;
+      }
+
+      const item = findAweme(parsed);
+      if (item && item.video) {
+        const title = item.desc || item.itemTitle || 'Douyin Video';
+        const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
+        const duration = Math.round((item.video.duration || 30000) / 1000);
+        let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
+        if (!videoStreamUrl && Array.isArray(item.video.playApiList)) videoStreamUrl = item.video.playApiList[0];
+
+        if (videoStreamUrl) {
+          const targetFilePath = path.join(tempDir, `${fileId}.mp4`);
+          const streamRes = await fetch(videoStreamUrl, {
+            headers: { 'User-Agent': ua, 'Referer': 'https://www.douyin.com/' },
+          });
+          if (streamRes.ok) {
+            const buffer = Buffer.from(await streamRes.arrayBuffer());
+            if (buffer.length > 5000) {
+              fs.writeFileSync(targetFilePath, buffer);
+              return {
+                filePath: targetFilePath,
+                mimeType: 'video/mp4',
+                title,
+                author,
+                duration,
+                platform: 'douyin' as const,
+              };
             }
           }
         }
       }
     } catch (e) {
-      console.warn('[Douyin Acrawler Serverless Error]:', e);
+      console.warn(`[Douyin Acrawler Serverless Error on ${pageUrl}]:`, e);
     }
   }
 
-  // Strategy 1: TikWM API (prioritize full MP4 video stream)
-  try {
-    const form = new URLSearchParams();
-    form.append('url', cleanUrl);
-    form.append('hd', '1');
+  return null;
+}
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+async function downloadViaTikWm(
+  cleanUrl: string,
+  fileId: string,
+  platform: 'tiktok' | 'douyin' | 'sample',
+  tempDir: string,
+  awemeId?: string
+) {
+  const urlsToTry = [cleanUrl];
+  if (platform === 'douyin' && awemeId) {
+    const canonical = `https://www.douyin.com/video/${awemeId}`;
+    if (!urlsToTry.includes(canonical)) urlsToTry.push(canonical);
+  }
 
-    const apiRes = await fetch('https://www.tikwm.com/api/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      },
-      body: form.toString(),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+  for (const urlTarget of urlsToTry) {
+    try {
+      const form = new URLSearchParams();
+      form.append('url', urlTarget);
+      form.append('hd', '1');
 
-    if (apiRes.ok) {
-      const data = await apiRes.json();
-      if (data.code === 0 && data.data) {
-        const videoData = data.data;
-        const title = videoData.title || (platform === 'douyin' ? 'Douyin Video' : 'TikTok Video');
-        const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
-        const duration = videoData.duration || 30;
-        
-        // Prioritize full video MP4 (play / wmplay / hdplay) to include all voiceovers, TTS & mixed dialogue
-        const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.music;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-        if (mediaStreamUrl) {
-          const isVideo = Boolean(videoData.play || videoData.wmplay || (!videoData.music && mediaStreamUrl));
-          const ext = isVideo ? 'mp4' : 'mp3';
-          const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
-          const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
+      const apiRes = await fetch('https://www.tikwm.com/api/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        },
+        body: form.toString(),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
 
-          const streamRes = await fetch(mediaStreamUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              Referer: 'https://www.tikwm.com/',
-            },
-          });
+      if (apiRes.ok) {
+        const data = await apiRes.json();
+        if (data.code === 0 && data.data) {
+          const videoData = data.data;
+          const title = videoData.title || (platform === 'douyin' ? 'Douyin Video' : 'TikTok Video');
+          const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
+          const duration = videoData.duration || 30;
 
-          if (streamRes.ok) {
-            const buffer = Buffer.from(await streamRes.arrayBuffer());
-            if (buffer.length > 1000) {
-              fs.writeFileSync(targetFilePath, buffer);
-              return { filePath: targetFilePath, mimeType, title, author, duration, platform };
+          const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.hdplay || videoData.music;
+
+          if (mediaStreamUrl) {
+            const isVideo = Boolean(videoData.play || videoData.wmplay || videoData.hdplay || (!videoData.music && mediaStreamUrl));
+            const ext = isVideo ? 'mp4' : 'mp3';
+            const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
+            const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
+
+            const streamRes = await fetch(mediaStreamUrl, {
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                Referer: platform === 'douyin' ? 'https://www.douyin.com/' : 'https://www.tiktok.com/',
+              },
+            });
+
+            if (streamRes.ok) {
+              const buffer = Buffer.from(await streamRes.arrayBuffer());
+              if (buffer.length > 1000) {
+                fs.writeFileSync(targetFilePath, buffer);
+                return { filePath: targetFilePath, mimeType, title, author, duration, platform };
+              }
             }
           }
         }
       }
+    } catch (err) {
+      console.warn(`[Download] TikWM attempt error on ${urlTarget}:`, err);
     }
-  } catch (err) {
-    console.warn('[Download] TikWM attempt error:', err);
   }
 
-  // Strategy 2: Douyin Direct API
+  return null;
+}
+
+async function downloadMedia(rawUrl: string, fileId: string) {
+  const tempDir = path.join(os.tmpdir(), 'tiktok_douyin_media');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+
+  const { finalUrl, platform, awemeId } = await resolveAndValidateUrl(rawUrl);
+
+  // Strategy for Douyin: Try ByteDance Acrawler & RENDER_DATA Direct Video Extractor first
   if (platform === 'douyin') {
+    const douyinRender = await downloadViaDouyinRenderData(finalUrl, fileId, tempDir, awemeId);
+    if (douyinRender) return douyinRender;
+
+    const tikWmRes = await downloadViaTikWm(finalUrl, fileId, platform, tempDir, awemeId);
+    if (tikWmRes) return tikWmRes;
+
+    // Strategy 3: Douyin Direct API
     try {
-      const redirectRes = await fetch(cleanUrl, {
+      const canonical = awemeId ? `https://www.douyin.com/video/${awemeId}` : finalUrl;
+      const redirectRes = await fetch(canonical, {
         method: 'GET',
         headers: {
           'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
         },
         redirect: 'follow',
       });
-      const finalUrl = redirectRes.url;
-      const awemeIdMatch = finalUrl.match(/video\/(\d+)/) || finalUrl.match(/modal_id=(\d+)/);
+      const resolvedUrl = redirectRes.url;
+      const awemeIdMatch = resolvedUrl.match(/video\/(\d+)/) || resolvedUrl.match(/modal_id=(\d+)/);
       if (awemeIdMatch && awemeIdMatch[1]) {
         const itemId = awemeIdMatch[1];
         const infoRes = await fetch(`https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=${itemId}`, {
@@ -330,11 +598,22 @@ async function downloadMedia(cleanUrl: string, fileId: string, platform: 'tiktok
     } catch (err) {
       console.warn('[Download] Douyin Direct attempt error:', err);
     }
+
+    throw new VideoExtractionError(
+      'WAF_CHALLENGE_BLOCKED',
+      'Không thể trích xuất video Douyin (Tường lửa chống bot hoặc cơ chế bảo mật của Douyin hạn chế máy chủ). ' +
+      'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng tab "Tải file MP4/MP3" trên giao diện để AI bóc tách ngay!'
+    );
   }
 
-  throw new Error(
-    'Không thể tải stream âm thanh từ đường link này (có thể do video bị khóa quyền riêng tư hoặc giới hạn vị trí). ' +
-    'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng nút "Tải file MP4/MP3" trên giao diện để bóc tách ngay!'
+  // Strategy for TikTok: TikWM API
+  const tikWmRes = await downloadViaTikWm(finalUrl, fileId, platform, tempDir, awemeId);
+  if (tikWmRes) return tikWmRes;
+
+  throw new VideoExtractionError(
+    'WAF_CHALLENGE_BLOCKED',
+    'Không thể tải stream video từ TikTok (Do hạn chế kết nối từ TikTok hoặc video bị giới hạn vùng). ' +
+    'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng tab "Tải file MP4/MP3" trên giao diện để AI bóc tách ngay!'
   );
 }
 
@@ -415,12 +694,10 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const cleanUrl = extractCleanUrl(url.trim());
-    const platform = identifyPlatform(cleanUrl);
     const fileId = `media_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    console.log(`[API /api/extract] Downloading: ${cleanUrl}`);
-    const media = await downloadMedia(cleanUrl, fileId, platform);
+    console.log(`[API /api/extract] Downloading: ${trimmedUrl}`);
+    const media = await downloadMedia(trimmedUrl, fileId);
     localFilePath = media.filePath;
 
     // Gemini Processing
@@ -517,7 +794,7 @@ export default async function handler(req: any, res: any) {
       throw lastError || new Error('Không nhận được phản hồi từ mô hình AI.');
     }
 
-    const parsedData = JSON.parse(geminiResponse.text);
+    const parsedData = safeParseGeminiJson(geminiResponse.text);
 
     const isVietnamese = parsedData.isVietnamese ?? (parsedData.sourceLanguage === 'vi' || parsedData.sourceLanguageName?.toLowerCase().includes('việt'));
     const rawSegments = parsedData.segments || [];
@@ -546,7 +823,7 @@ export default async function handler(req: any, res: any) {
         isVietnamese: Boolean(isVietnamese),
         id: `ext_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         videoMetadata: {
-          url: cleanUrl,
+          url: trimmedUrl,
           platform: media.platform,
           title: media.title,
           author: media.author,
@@ -559,12 +836,35 @@ export default async function handler(req: any, res: any) {
     });
   } catch (error: any) {
     console.error('[API /api/extract Error]:', error);
-    let msg = error.message || 'Lỗi bóc tách video.';
-    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-      msg = 'Gemini API Key đang bị chạm hạn mức tốc độ (Rate Limit 429). Vui lòng thử lại sau 30 giây hoặc bấm nút [API Key] trên header để đổi Key cá nhân!';
+
+    if (error instanceof VideoExtractionError) {
+      const statusMap: Record<string, number> = {
+        VIDEO_UNAVAILABLE: 404,
+        WAF_CHALLENGE_BLOCKED: 403,
+        RATE_LIMIT: 429,
+        INVALID_URL: 400,
+        DOWNLOAD_STREAM_FAILED: 502,
+        AI_ERROR: 500,
+      };
+      const statusCode = statusMap[error.code] || 500;
+      return res.status(statusCode).json({
+        success: false,
+        errorCode: error.code,
+        error: error.message,
+      });
     }
+
+    let msg = error.message || 'Lỗi bóc tách video.';
+    let errorCode = 'EXTRACTION_FAILED';
+
+    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+      errorCode = 'RATE_LIMIT';
+      msg = 'Gemini AI đang bị chạm hạn mức tần suất (Rate Limit 429). Vui lòng thử lại sau 30 giây!';
+    }
+
     return res.status(500).json({
       success: false,
+      errorCode,
       error: msg,
     });
   } finally {

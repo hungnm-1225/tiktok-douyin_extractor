@@ -11,10 +11,15 @@ import { LoadingCuteModal } from './components/LoadingCuteModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { SampleModal } from './components/SampleModal';
 import { ExtractionResult, SampleVideoItem } from './types';
-import { AlertCircle, Sparkles } from 'lucide-react';
+import { AlertCircle, Sparkles, AlertOctagon, ShieldAlert, Clock, RefreshCw } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 const LOCAL_STORAGE_HISTORY_KEY = 'tiktok_douyin_script_history_v2';
+
+export interface AppErrorState {
+  code?: string;
+  message: string;
+}
 
 const DEFAULT_SAMPLES: SampleVideoItem[] = [
   {
@@ -130,7 +135,7 @@ export default function App() {
   const [isSampleModalOpen, setIsSampleModalOpen] = useState<boolean>(false);
   const [samples, setSamples] = useState<SampleVideoItem[]>(DEFAULT_SAMPLES);
   const [onlyVietnamese, setOnlyVietnamese] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorState, setErrorState] = useState<AppErrorState | null>(null);
 
   // Load history & samples from LocalStorage / API
   useEffect(() => {
@@ -218,12 +223,15 @@ export default function App() {
     if (!url.trim()) return;
 
     if (!isValidMediaUrl(url)) {
-      setErrorMessage('Vui lòng nhập đúng đường link video từ TikTok hoặc Douyin (bắt đầu bằng https://...). Hệ thống không tìm kiếm theo từ khóa văn bản.');
+      setErrorState({
+        code: 'INVALID_URL',
+        message: 'Vui lòng nhập đúng đường link video từ TikTok hoặc Douyin (bắt đầu bằng https://...). Hệ thống không tìm kiếm theo từ khóa văn bản.',
+      });
       return;
     }
 
     setIsLoading(true);
-    setErrorMessage(null);
+    setErrorState(null);
 
     try {
       const res = await fetch('/api/extract', {
@@ -245,11 +253,9 @@ export default function App() {
       }
 
       if (!res.ok || !data.success) {
-        let msg = data.error || 'Bóc tách video thất bại.';
-        if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
-          msg = 'Hạn mức AI hôm nay tạm thời đạt giới hạn. Vui lòng thử lại sau giây lát!';
-        }
-        throw new Error(msg);
+        const errObj: any = new Error(data.error || 'Bóc tách video thất bại.');
+        errObj.code = data.errorCode;
+        throw errObj;
       }
 
       data.data.onlyVietnamese = onlyVietnamese;
@@ -264,11 +270,13 @@ export default function App() {
       });
     } catch (err: any) {
       console.error('Extract error:', err);
-      let errMsg = err.message || 'Đã có lỗi xảy ra khi bóc tách video.';
-      if (errMsg.includes('Failed to fetch')) {
-        errMsg = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
+      let code = err.code || 'UNKNOWN';
+      let message = err.message || 'Đã có lỗi xảy ra khi bóc tách video.';
+      if (message.includes('Failed to fetch')) {
+        code = 'NETWORK_ERROR';
+        message = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
       }
-      setErrorMessage(errMsg);
+      setErrorState({ code, message });
     } finally {
       setIsLoading(false);
     }
@@ -279,7 +287,7 @@ export default function App() {
     if (!file) return;
 
     setIsLoading(true);
-    setErrorMessage(null);
+    setErrorState(null);
 
     const reader = new FileReader();
     reader.onload = async () => {
@@ -307,11 +315,9 @@ export default function App() {
         }
 
         if (!res.ok || !data.success) {
-          let msg = data.error || 'Lỗi bóc tách file media.';
-          if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
-            msg = 'Hạn mức AI hôm nay tạm thời đạt giới hạn. Vui lòng bấm nút [API Key] trên thanh menu để nhập API Key riêng!';
-          }
-          throw new Error(msg);
+          const errObj: any = new Error(data.error || 'Lỗi bóc tách file media.');
+          errObj.code = data.errorCode;
+          throw errObj;
         }
 
         data.data.onlyVietnamese = onlyVietnamese;
@@ -330,18 +336,20 @@ export default function App() {
         });
       } catch (err: any) {
         console.error('Upload extract error:', err);
-        let errMsg = err.message || 'Lỗi xử lý file tải lên.';
-        if (errMsg.includes('Failed to fetch')) {
-          errMsg = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
+        let code = err.code || 'UNKNOWN';
+        let message = err.message || 'Lỗi xử lý file tải lên.';
+        if (message.includes('Failed to fetch')) {
+          code = 'NETWORK_ERROR';
+          message = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
         }
-        setErrorMessage(errMsg);
+        setErrorState({ code, message });
       } finally {
         setIsLoading(false);
       }
     };
 
     reader.onerror = () => {
-      setErrorMessage('Không thể đọc file đã chọn.');
+      setErrorState({ code: 'FILE_READ_ERROR', message: 'Không thể đọc file đã chọn từ máy tính của bạn.' });
       setIsLoading(false);
     };
 
@@ -364,18 +372,55 @@ export default function App() {
       {/* Main Container */}
       <main id="app-body" className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-8">
         
-        {/* Error Alert Box */}
-        {errorMessage && (
-          <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm flex items-start justify-between gap-3 shadow-sm animate-in fade-in">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
+        {/* Enhanced Error & Video Status Alert Box */}
+        {errorState && (
+          <div
+            id="error-status-alert-box"
+            className={`p-4 sm:p-5 rounded-2xl border text-xs sm:text-sm flex items-start justify-between gap-3 shadow-sm animate-in fade-in transition-all ${
+              errorState.code === 'VIDEO_UNAVAILABLE'
+                ? 'bg-amber-50/90 border-amber-200 text-amber-900'
+                : errorState.code === 'WAF_CHALLENGE_BLOCKED'
+                ? 'bg-purple-50/90 border-purple-200 text-purple-950'
+                : errorState.code === 'RATE_LIMIT'
+                ? 'bg-blue-50/90 border-blue-200 text-blue-900'
+                : 'bg-rose-50/90 border-rose-200 text-rose-900'
+            }`}
+          >
+            <div className="flex items-start gap-3 flex-1">
+              {errorState.code === 'VIDEO_UNAVAILABLE' ? (
+                <AlertOctagon className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              ) : errorState.code === 'WAF_CHALLENGE_BLOCKED' ? (
+                <ShieldAlert className="h-5 w-5 text-purple-600 shrink-0 mt-0.5" />
+              ) : errorState.code === 'RATE_LIMIT' ? (
+                <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
+              )}
               <div className="space-y-1">
-                <strong className="font-bold">Thông báo:</strong> {errorMessage}
+                <div className="font-extrabold flex items-center gap-1.5 text-xs sm:text-sm">
+                  {errorState.code === 'VIDEO_UNAVAILABLE' && (
+                    <span>🚫 Video Không Khả Dụng (Đã bị xóa hoặc để riêng tư)</span>
+                  )}
+                  {errorState.code === 'WAF_CHALLENGE_BLOCKED' && (
+                    <span>🛡️ Tường Lửa Nền Tảng Hạn Chế Máy Chủ</span>
+                  )}
+                  {errorState.code === 'RATE_LIMIT' && (
+                    <span>⏳ Chạm Hạn Mức Tần Suất (Rate Limit 429)</span>
+                  )}
+                  {errorState.code !== 'VIDEO_UNAVAILABLE' &&
+                    errorState.code !== 'WAF_CHALLENGE_BLOCKED' &&
+                    errorState.code !== 'RATE_LIMIT' && (
+                      <span>Thông báo lỗi hệ thống:</span>
+                    )}
+                </div>
+                <p className="leading-relaxed text-xs sm:text-sm font-medium">
+                  {errorState.message}
+                </p>
               </div>
             </div>
             <button
-              onClick={() => setErrorMessage(null)}
-              className="text-xs font-bold text-rose-600 hover:text-rose-800 underline shrink-0 cursor-pointer"
+              onClick={() => setErrorState(null)}
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 underline shrink-0 cursor-pointer p-1"
             >
               Đóng
             </button>

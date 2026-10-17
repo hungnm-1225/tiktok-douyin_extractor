@@ -15,6 +15,23 @@ if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
+export type ExtractionErrorCode =
+  | 'VIDEO_UNAVAILABLE'
+  | 'WAF_CHALLENGE_BLOCKED'
+  | 'RATE_LIMIT'
+  | 'INVALID_URL'
+  | 'DOWNLOAD_STREAM_FAILED'
+  | 'AI_ERROR';
+
+export class VideoExtractionError extends Error {
+  code: ExtractionErrorCode;
+  constructor(code: ExtractionErrorCode, message: string) {
+    super(message);
+    this.name = 'VideoExtractionError';
+    this.code = code;
+  }
+}
+
 export interface DownloadedMedia {
   filePath: string;
   mimeType: string;
@@ -29,15 +46,65 @@ export interface DownloadedMedia {
  */
 export function extractCleanUrl(text: string): string {
   const urlMatch = text.match(/https?:\/\/[^\s"'<>]+/);
-  let clean = urlMatch ? urlMatch[0] : text.trim();
+  return urlMatch ? urlMatch[0] : text.trim();
+}
 
-  // Normalize Douyin modal_id link: e.g. https://www.douyin.com/jingxuan?modal_id=7696795427303181568
-  const douyinModalMatch = clean.match(/douyin\.com\/.*?modal_id=(\d+)/i);
-  if (douyinModalMatch && douyinModalMatch[1]) {
-    // Keep original or provide direct aweme link for flexibility
-    return clean;
+/**
+ * Resolves short links (e.g. v.douyin.com, vt.tiktok.com) and validates whether the video is still active.
+ * If Douyin/TikTok redirects to homepage (root), the video is deleted, private, or expired!
+ */
+export async function resolveAndValidateUrl(rawUrl: string): Promise<{
+  finalUrl: string;
+  platform: 'tiktok' | 'douyin' | 'sample';
+  awemeId?: string;
+}> {
+  const cleanUrl = extractCleanUrl(rawUrl);
+  const platform = identifyPlatform(cleanUrl);
+
+  const isShortLink =
+    cleanUrl.includes('v.douyin.com') ||
+    cleanUrl.includes('vt.tiktok.com') ||
+    cleanUrl.includes('vm.tiktok.com');
+
+  let finalUrl = cleanUrl;
+
+  try {
+    const res = await fetch(cleanUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+      },
+    });
+
+    if (res.url) {
+      finalUrl = res.url;
+    }
+  } catch (err: any) {
+    console.warn('[URL Resolver] Network warning while following redirect:', err.message);
   }
-  return clean;
+
+  // Check if destination is redirected back to root homepage
+  // Douyin: https://www.douyin.com/ or https://www.douyin.com/discover (indicates deleted/private video)
+  // TikTok: https://www.tiktok.com/ or https://www.tiktok.com/explore
+  const isDouyinRoot = /^https?:\/\/(www\.)?douyin\.com\/?(\?.*)?$/i.test(finalUrl);
+  const isTikTokRoot = /^https?:\/\/(www\.)?tiktok\.com\/?(\?.*)?$/i.test(finalUrl);
+
+  if ((isShortLink && (isDouyinRoot || isTikTokRoot)) || (!isShortLink && (isDouyinRoot || isTikTokRoot))) {
+    throw new VideoExtractionError(
+      'VIDEO_UNAVAILABLE',
+      'Video không khả dụng (Video này có thể đã bị tác giả xóa, cài đặt chế độ riêng tư hoặc đường link chia sẻ đã hết hạn).'
+    );
+  }
+
+  // Extract Aweme ID if present
+  const awemeMatch =
+    finalUrl.match(/video\/(\d+)/i) ||
+    finalUrl.match(/modal_id=(\d+)/i) ||
+    finalUrl.match(/item_ids=(\d+)/i);
+  const awemeId = awemeMatch ? awemeMatch[1] : undefined;
+
+  return { finalUrl, platform, awemeId };
 }
 
 /**
@@ -95,251 +162,298 @@ export async function ensureYtDlp(): Promise<string> {
  * Strategy 1: ByteDance Acrawler & RENDER_DATA Direct Video Extractor (Douyin)
  * Solves Douyin WAF/anti-crawler challenge by calculating __ac_signature via byted_acrawler in a sandbox
  */
-async function downloadViaDouyinRenderData(cleanUrl: string, fileId: string): Promise<DownloadedMedia | null> {
-  try {
-    console.log(`[Douyin Acrawler] Extracting video directly via RENDER_DATA from: ${cleanUrl}`);
-    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-
-    // Step 1: Initial request to obtain challenge script and __ac_nonce
-    const res1 = await fetch(cleanUrl, {
-      headers: { 'User-Agent': ua }
-    });
-    const html1 = await res1.text();
-    const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
-    const nonceMatch = cookies1.join('; ').match(/__ac_nonce=([^;]+)/);
-    if (!nonceMatch) {
-      console.warn('[Douyin Acrawler] No __ac_nonce returned');
-      return null;
-    }
-    const nonce = nonceMatch[1];
-
-    const scripts = html1.match(/<script>([\s\S]*?)<\/script>/g) || [];
-    if (scripts.length === 0) return null;
-    const s0 = scripts[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
-
-    // Step 2: Run byted_acrawler script in VM sandbox to calculate signature
-    const sandbox = {
-      window: {},
-      navigator: { userAgent: ua, appVersion: '5.0 (Windows NT 10.0; Win64; x64)', platform: 'Win32', plugins: [] },
-      document: { referrer: 'https://www.douyin.com/', cookie: '__ac_nonce=' + nonce, getElementsByTagName: () => [], createElement: () => ({ setAttribute: () => {} }) },
-      location: { protocol: 'https:', href: cleanUrl, reload: () => {} },
-      sessionStorage: { setItem: () => {}, getItem: () => null },
-      localStorage: { setItem: () => {}, getItem: () => null },
-      performance: { timing: { navigationStart: Date.now() } },
-      console: { log: () => {}, warn: () => {}, error: () => {} },
-      setTimeout: setTimeout,
-    };
-    sandbox.window = sandbox;
-    (sandbox as any).global = sandbox;
-    (sandbox as any).self = sandbox;
-
-    const ctx = vm.createContext(sandbox);
-    vm.runInContext(s0, ctx);
-
-    if (!(sandbox as any).byted_acrawler) {
-      console.warn('[Douyin Acrawler] byted_acrawler not found in sandbox');
-      return null;
-    }
-
-    (sandbox as any).byted_acrawler.init({ aid: 99999999, dfp: 0 });
-    const signature = (sandbox as any).byted_acrawler.sign('', nonce);
-    if (!signature) {
-      console.warn('[Douyin Acrawler] Signature generation failed');
-      return null;
-    }
-
-    // Step 3: Request page with authenticated challenge cookies
-    const cookieHeader = `__ac_nonce=${nonce}; __ac_signature=${signature};`;
-    const pageRes = await fetch(cleanUrl, {
-      headers: {
-        'User-Agent': ua,
-        'Cookie': cookieHeader,
-        'Referer': 'https://www.douyin.com/'
-      }
-    });
-    const pageHtml = await pageRes.text();
-
-    // Step 4: Parse RENDER_DATA
-    const renderDataMatch = pageHtml.match(/<script id=\"RENDER_DATA\"[^>]*>(.*?)<\/script>/);
-    if (!renderDataMatch) {
-      console.warn('[Douyin Acrawler] RENDER_DATA not found in response');
-      return null;
-    }
-
-    const rawData = decodeURIComponent(renderDataMatch[1]);
-    const parsed = JSON.parse(rawData);
-
-    // Modal ID check
-    const modalMatch = cleanUrl.match(/modal_id=(\d+)/) || cleanUrl.match(/video\/(\d+)/);
-    const targetAwemeId = modalMatch ? modalMatch[1] : '';
-
-    function findAweme(obj: any): any {
-      if (!obj || typeof obj !== 'object') return null;
-      if (targetAwemeId && (obj.awemeId === targetAwemeId || obj.aweme_id === targetAwemeId)) {
-        return obj;
-      }
-      if (obj.video && (obj.desc || obj.itemTitle)) {
-        return obj;
-      }
-      for (const k of Object.keys(obj)) {
-        const found = findAweme(obj[k]);
-        if (found) return found;
-      }
-      return null;
-    }
-
-    const item = findAweme(parsed);
-    if (!item || !item.video) {
-      console.warn('[Douyin Acrawler] No video item found in RENDER_DATA');
-      return null;
-    }
-
-    const title = item.desc || item.itemTitle || 'Douyin Video';
-    const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
-    const duration = Math.round((item.video.duration || 30000) / 1000);
-
-    // Get MP4 video stream URL
-    let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
-    if (!videoStreamUrl && Array.isArray(item.video.playApiList)) {
-      videoStreamUrl = item.video.playApiList[0];
-    }
-
-    if (!videoStreamUrl) {
-      console.warn('[Douyin Acrawler] No video stream URL found in item.video');
-      return null;
-    }
-
-    console.log(`[Douyin Acrawler] Downloading full MP4 video for "${title}"...`);
-    const targetFilePath = path.join(TEMP_DIR, `${fileId}.mp4`);
-
-    const streamRes = await fetch(videoStreamUrl, {
-      headers: {
-        'User-Agent': ua,
-        'Referer': 'https://www.douyin.com/'
-      }
-    });
-
-    if (!streamRes.ok) {
-      console.warn(`[Douyin Acrawler] Stream fetch failed with status ${streamRes.status}`);
-      return null;
-    }
-
-    const buffer = Buffer.from(await streamRes.arrayBuffer());
-    if (buffer.length < 5000) {
-      console.warn(`[Douyin Acrawler] Downloaded buffer too small: ${buffer.length} bytes`);
-      return null;
-    }
-
-    fs.writeFileSync(targetFilePath, buffer);
-    console.log(`[Douyin Acrawler] Successfully downloaded ${buffer.length} bytes (~${(buffer.length / 1024 / 1024).toFixed(2)} MB) to ${targetFilePath}`);
-
-    return {
-      filePath: targetFilePath,
-      mimeType: 'video/mp4',
-      title,
-      author,
-      duration,
-      platform: 'douyin',
-    };
-  } catch (err: any) {
-    console.warn('[Douyin Acrawler Error]:', err.message);
-    return null;
+async function downloadViaDouyinRenderData(
+  targetUrl: string,
+  fileId: string,
+  awemeId?: string
+): Promise<DownloadedMedia | null> {
+  const urlsToTry: string[] = [targetUrl];
+  if (awemeId) {
+    const canonicalModal = `https://www.douyin.com/jingxuan?modal_id=${awemeId}`;
+    const canonicalVideo = `https://www.douyin.com/video/${awemeId}`;
+    if (!urlsToTry.includes(canonicalModal)) urlsToTry.push(canonicalModal);
+    if (!urlsToTry.includes(canonicalVideo)) urlsToTry.push(canonicalVideo);
   }
+
+  for (const pageUrl of urlsToTry) {
+    try {
+      console.log(`[Douyin Acrawler] Extracting video directly via RENDER_DATA from: ${pageUrl}`);
+      const ua =
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+      // Step 1: Initial request to obtain challenge script and __ac_nonce
+      const res1 = await fetch(pageUrl, {
+        headers: {
+          'User-Agent': ua,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+      });
+      const html1 = await res1.text();
+      const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
+      const nonceMatch = cookies1.join('; ').match(/__ac_nonce=([^;]+)/);
+      if (!nonceMatch) {
+        console.warn('[Douyin Acrawler] No __ac_nonce returned for:', pageUrl);
+        continue;
+      }
+      const nonce = nonceMatch[1];
+
+      const scripts = html1.match(/<script>([\s\S]*?)<\/script>/g) || [];
+      if (scripts.length === 0) continue;
+      const s0 = scripts[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
+
+      // Step 2: Run byted_acrawler script in VM sandbox to calculate signature
+      const sandbox = {
+        window: {},
+        navigator: {
+          userAgent: ua,
+          appVersion: '5.0 (Windows NT 10.0; Win64; x64)',
+          platform: 'Win32',
+          plugins: [],
+        },
+        document: {
+          referrer: 'https://www.douyin.com/',
+          cookie: '__ac_nonce=' + nonce,
+          getElementsByTagName: () => [],
+          createElement: () => ({ setAttribute: () => {} }),
+        },
+        location: { protocol: 'https:', href: pageUrl, reload: () => {} },
+        sessionStorage: { setItem: () => {}, getItem: () => null },
+        localStorage: { setItem: () => {}, getItem: () => null },
+        performance: { timing: { navigationStart: Date.now() } },
+        console: { log: () => {}, warn: () => {}, error: () => {} },
+        setTimeout: setTimeout,
+      };
+      sandbox.window = sandbox;
+      (sandbox as any).global = sandbox;
+      (sandbox as any).self = sandbox;
+
+      const ctx = vm.createContext(sandbox);
+      vm.runInContext(s0, ctx);
+
+      if (!(sandbox as any).byted_acrawler) {
+        console.warn('[Douyin Acrawler] byted_acrawler not found in sandbox');
+        continue;
+      }
+
+      (sandbox as any).byted_acrawler.init({ aid: 99999999, dfp: 0 });
+      const signature = (sandbox as any).byted_acrawler.sign('', nonce);
+      if (!signature) {
+        console.warn('[Douyin Acrawler] Signature generation failed');
+        continue;
+      }
+
+      // Step 3: Request page with authenticated challenge cookies
+      const cookieHeader = `__ac_nonce=${nonce}; __ac_signature=${signature};`;
+      const pageRes = await fetch(pageUrl, {
+        headers: {
+          'User-Agent': ua,
+          'Cookie': cookieHeader,
+          'Referer': 'https://www.douyin.com/',
+        },
+      });
+      const pageHtml = await pageRes.text();
+
+      // Step 4: Parse RENDER_DATA
+      const renderDataMatch = pageHtml.match(/<script id=\"RENDER_DATA\"[^>]*>(.*?)<\/script>/);
+      if (!renderDataMatch) {
+        console.warn('[Douyin Acrawler] RENDER_DATA not found in response for:', pageUrl);
+        continue;
+      }
+
+      const rawData = decodeURIComponent(renderDataMatch[1]);
+      const parsed = JSON.parse(rawData);
+
+      // Modal ID check
+      const modalMatch = pageUrl.match(/modal_id=(\d+)/) || pageUrl.match(/video\/(\d+)/);
+      const targetAwemeId = awemeId || (modalMatch ? modalMatch[1] : '');
+
+      function findAweme(obj: any): any {
+        if (!obj || typeof obj !== 'object') return null;
+        if (targetAwemeId && (obj.awemeId === targetAwemeId || obj.aweme_id === targetAwemeId)) {
+          return obj;
+        }
+        if (obj.video && (obj.desc || obj.itemTitle)) {
+          return obj;
+        }
+        for (const k of Object.keys(obj)) {
+          const found = findAweme(obj[k]);
+          if (found) return found;
+        }
+        return null;
+      }
+
+      const item = findAweme(parsed);
+      if (!item || !item.video) {
+        console.warn('[Douyin Acrawler] No video item found in RENDER_DATA');
+        continue;
+      }
+
+      const title = item.desc || item.itemTitle || 'Douyin Video';
+      const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
+      const duration = Math.round((item.video.duration || 30000) / 1000);
+
+      // Get MP4 video stream URL
+      let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
+      if (!videoStreamUrl && Array.isArray(item.video.playApiList)) {
+        videoStreamUrl = item.video.playApiList[0];
+      }
+
+      if (!videoStreamUrl) {
+        console.warn('[Douyin Acrawler] No video stream URL found in item.video');
+        continue;
+      }
+
+      console.log(`[Douyin Acrawler] Downloading full MP4 video for "${title}"...`);
+      const targetFilePath = path.join(TEMP_DIR, `${fileId}.mp4`);
+
+      const streamRes = await fetch(videoStreamUrl, {
+        headers: {
+          'User-Agent': ua,
+          'Referer': 'https://www.douyin.com/',
+        },
+      });
+
+      if (!streamRes.ok) {
+        console.warn(`[Douyin Acrawler] Stream fetch failed with status ${streamRes.status}`);
+        continue;
+      }
+
+      const buffer = Buffer.from(await streamRes.arrayBuffer());
+      if (buffer.length < 5000) {
+        console.warn(`[Douyin Acrawler] Downloaded buffer too small: ${buffer.length} bytes`);
+        continue;
+      }
+
+      fs.writeFileSync(targetFilePath, buffer);
+      console.log(
+        `[Douyin Acrawler] Successfully downloaded ${buffer.length} bytes (~${(buffer.length / 1024 / 1024).toFixed(2)} MB) to ${targetFilePath}`
+      );
+
+      return {
+        filePath: targetFilePath,
+        mimeType: 'video/mp4',
+        title,
+        author,
+        duration,
+        platform: 'douyin',
+      };
+    } catch (err: any) {
+      console.warn(`[Douyin Acrawler Error on ${pageUrl}]:`, err.message);
+    }
+  }
+
+  return null;
 }
 
 /**
  * Strategy 1: High-Speed Direct API for TikTok & Douyin (TikWM Engine)
  */
-async function downloadViaTikWmApi(cleanUrl: string, fileId: string, platform: 'tiktok' | 'douyin' | 'sample'): Promise<DownloadedMedia | null> {
-  try {
-    const form = new URLSearchParams();
-    form.append('url', cleanUrl);
-    form.append('hd', '1');
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-    const apiRes = await fetch('https://www.tikwm.com/api/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tikwm.com/',
-      },
-      body: form.toString(),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!apiRes.ok) {
-      console.warn(`[TikWM API] HTTP error ${apiRes.status}`);
-      return null;
-    }
-
-    const data = await apiRes.json();
-    if (data.code !== 0 || !data.data) {
-      console.warn(`[TikWM API] Unsuccessful response:`, data.msg || data.code);
-      return null;
-    }
-
-    const videoData = data.data;
-    const title = videoData.title || (platform === 'douyin' ? 'Douyin Video' : 'TikTok Video');
-    const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
-    const duration = videoData.duration || 30;
-
-    // Always prioritize the full VIDEO stream (MP4) because TikTok/Douyin videos often have 
-    // AI text-to-speech voiceovers or custom voice dubbing mixed into the video track,
-    // while videoData.music only contains the raw background music track without the spoken dialogue.
-    const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.music;
-    if (!mediaStreamUrl) {
-      console.warn('[TikWM API] No stream URL found in payload.');
-      return null;
-    }
-
-    const isVideo = Boolean(videoData.play || videoData.wmplay || (!videoData.music && mediaStreamUrl));
-    const extension = isVideo ? 'mp4' : 'mp3';
-    const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
-    const targetFilePath = path.join(TEMP_DIR, `${fileId}.${extension}`);
-
-    console.log(`[TikWM API] Downloading full video/media stream (${extension})...`);
-    const streamRes = await fetch(mediaStreamUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/',
-      },
-    });
-
-    if (!streamRes.ok) {
-      console.warn(`[TikWM API] Failed to download stream: ${streamRes.status}`);
-      return null;
-    }
-
-    if (!fs.existsSync(TEMP_DIR)) {
-      fs.mkdirSync(TEMP_DIR, { recursive: true });
-    }
-
-    const arrayBuffer = await streamRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    if (buffer.length < 1000) {
-      console.warn(`[TikWM API] Downloaded file is too small (${buffer.length} bytes), might be invalid.`);
-      return null;
-    }
-
-    fs.writeFileSync(targetFilePath, buffer);
-    console.log(`[TikWM API] Successfully downloaded ${buffer.length} bytes to ${targetFilePath}`);
-    return {
-      filePath: targetFilePath,
-      mimeType,
-      title,
-      author,
-      duration,
-      platform,
-    };
-  } catch (err: any) {
-    console.warn(`[TikWM API] Error occurred:`, err.message);
-    return null;
+async function downloadViaTikWmApi(
+  cleanUrl: string,
+  fileId: string,
+  platform: 'tiktok' | 'douyin' | 'sample',
+  awemeId?: string
+): Promise<DownloadedMedia | null> {
+  const urlsToTry = [cleanUrl];
+  if (platform === 'douyin' && awemeId) {
+    const canonical = `https://www.douyin.com/video/${awemeId}`;
+    if (!urlsToTry.includes(canonical)) urlsToTry.push(canonical);
   }
+
+  for (const urlTarget of urlsToTry) {
+    try {
+      const form = new URLSearchParams();
+      form.append('url', urlTarget);
+      form.append('hd', '1');
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      const apiRes = await fetch('https://www.tikwm.com/api/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': 'https://www.tikwm.com/',
+        },
+        body: form.toString(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!apiRes.ok) {
+        console.warn(`[TikWM API] HTTP error ${apiRes.status}`);
+        continue;
+      }
+
+      const data = await apiRes.json();
+      if (data.code !== 0 || !data.data) {
+        console.warn(`[TikWM API] Unsuccessful response on ${urlTarget}:`, data.msg || data.code);
+        continue;
+      }
+
+      const videoData = data.data;
+      const title = videoData.title || (platform === 'douyin' ? 'Douyin Video' : 'TikTok Video');
+      const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
+      const duration = videoData.duration || 30;
+
+      // Prioritize full VIDEO stream (MP4) to capture all spoken dialogue,
+      // voiceovers and mixed speech, preventing capture of background music track only.
+      const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.hdplay || videoData.music;
+      if (!mediaStreamUrl) {
+        console.warn('[TikWM API] No stream URL found in payload.');
+        continue;
+      }
+
+      const isVideo = Boolean(videoData.play || videoData.wmplay || videoData.hdplay || (!videoData.music && mediaStreamUrl));
+      const extension = isVideo ? 'mp4' : 'mp3';
+      const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
+      const targetFilePath = path.join(TEMP_DIR, `${fileId}.${extension}`);
+
+      console.log(`[TikWM API] Downloading full video/media stream (${extension})...`);
+      const streamRes = await fetch(mediaStreamUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': platform === 'douyin' ? 'https://www.douyin.com/' : 'https://www.tiktok.com/',
+        },
+      });
+
+      if (!streamRes.ok) {
+        console.warn(`[TikWM API] Failed to download stream: ${streamRes.status}`);
+        continue;
+      }
+
+      if (!fs.existsSync(TEMP_DIR)) {
+        fs.mkdirSync(TEMP_DIR, { recursive: true });
+      }
+
+      const arrayBuffer = await streamRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      if (buffer.length < 1000) {
+        console.warn(`[TikWM API] Downloaded file is too small (${buffer.length} bytes), might be invalid.`);
+        continue;
+      }
+
+      fs.writeFileSync(targetFilePath, buffer);
+      console.log(`[TikWM API] Successfully downloaded ${buffer.length} bytes to ${targetFilePath}`);
+      return {
+        filePath: targetFilePath,
+        mimeType,
+        title,
+        author,
+        duration,
+        platform,
+      };
+    } catch (err: any) {
+      console.warn(`[TikWM API] Error occurred on ${urlTarget}:`, err.message);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -506,46 +620,66 @@ async function downloadViaYtDlp(cleanUrl: string, fileId: string, platform: 'tik
  * preventing accidental capture of TikTok/Douyin background music sounds.
  */
 export async function downloadMediaFromUrl(rawUrl: string): Promise<DownloadedMedia> {
-  const cleanUrl = extractCleanUrl(rawUrl);
-  const platform = identifyPlatform(cleanUrl);
+  const { finalUrl, platform, awemeId } = await resolveAndValidateUrl(rawUrl);
   const fileId = `media_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-  console.log(`[MediaExtractor] Processing ${platform.toUpperCase()} URL: ${cleanUrl}`);
+  console.log(`[MediaExtractor] Processing ${platform.toUpperCase()} URL: ${finalUrl} (awemeId: ${awemeId || 'none'})`);
 
   if (platform === 'douyin') {
     // 1. Try ByteDance Acrawler & RENDER_DATA direct MP4 video extractor (handles modal_id, jingxuan, share links)
-    const douyinRenderResult = await downloadViaDouyinRenderData(cleanUrl, fileId);
+    const douyinRenderResult = await downloadViaDouyinRenderData(finalUrl, fileId, awemeId);
     if (douyinRenderResult) {
       return douyinRenderResult;
     }
 
-    // 2. Try Douyin Direct Web API
-    const douyinResult = await downloadViaDouyinApi(cleanUrl, fileId);
-    if (douyinResult) {
-      return douyinResult;
-    }
-
-    // 3. Try TikWM API
-    const tikWmResult = await downloadViaTikWmApi(cleanUrl, fileId, platform);
+    // 2. Try TikWM API with canonical URL
+    const canonicalDouyinUrl = awemeId ? `https://www.douyin.com/video/${awemeId}` : finalUrl;
+    const tikWmResult = await downloadViaTikWmApi(canonicalDouyinUrl, fileId, platform, awemeId);
     if (tikWmResult) {
       return tikWmResult;
     }
 
+    // 3. Try Douyin Direct Web API
+    const douyinResult = await downloadViaDouyinApi(finalUrl, fileId);
+    if (douyinResult) {
+      return douyinResult;
+    }
+
     // 4. Fall back to yt-dlp
     console.log('[MediaExtractor] Falling back to yt-dlp for Douyin...');
-    return await downloadViaYtDlp(cleanUrl, fileId, platform);
+    try {
+      return await downloadViaYtDlp(finalUrl, fileId, platform);
+    } catch (ytErr: any) {
+      console.warn('[MediaExtractor] yt-dlp also failed for Douyin:', ytErr.message);
+    }
+
+    throw new VideoExtractionError(
+      'WAF_CHALLENGE_BLOCKED',
+      'Không thể trích xuất video Douyin (Tường lửa chống bot hoặc cơ chế bảo mật của Douyin hạn chế máy chủ). ' +
+      'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng tab "Tải file MP4/MP3" trên giao diện để AI bóc tách ngay!'
+    );
   }
 
   // TikTok platform
   // 1. Try TikWM API first (fastest, extracts full MP4 video stream with audio track)
-  const tikWmResult = await downloadViaTikWmApi(cleanUrl, fileId, platform);
+  const tikWmResult = await downloadViaTikWmApi(finalUrl, fileId, platform, awemeId);
   if (tikWmResult) {
     return tikWmResult;
   }
 
   // 2. Fall back to yt-dlp
   console.log('[MediaExtractor] Falling back to yt-dlp for TikTok...');
-  return await downloadViaYtDlp(cleanUrl, fileId, platform);
+  try {
+    return await downloadViaYtDlp(finalUrl, fileId, platform);
+  } catch (ytErr: any) {
+    console.warn('[MediaExtractor] yt-dlp failed for TikTok:', ytErr.message);
+  }
+
+  throw new VideoExtractionError(
+    'WAF_CHALLENGE_BLOCKED',
+    'Không thể tải stream video từ TikTok (Do hạn chế kết nối từ TikTok hoặc video bị giới hạn vùng). ' +
+    'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng tab "Tải file MP4/MP3" trên giao diện để AI bóc tách ngay!'
+  );
 }
 
 /**
@@ -554,7 +688,8 @@ export async function downloadMediaFromUrl(rawUrl: string): Promise<DownloadedMe
  */
 export async function extractAudioIfVideoTooLarge(
   inputFilePath: string,
-  maxSizeBytes: number = 15 * 1024 * 1024
+  maxSizeBytes: number = 15 * 1024 * 1024,
+  deleteOriginal: boolean = false
 ): Promise<{ filePath: string; mimeType: string }> {
   try {
     if (!fs.existsSync(inputFilePath)) {
@@ -566,27 +701,28 @@ export async function extractAudioIfVideoTooLarge(
     const isVideo = ['.mp4', '.mov', '.mkv', '.webm', '.avi', '.flv'].includes(ext);
 
     // If file is smaller than threshold or not a video, keep original
-    if (!isVideo || stats.size <= maxSizeBytes) {
+    if (!isVideo || (maxSizeBytes > 0 && stats.size <= maxSizeBytes)) {
       return {
         filePath: inputFilePath,
         mimeType: isVideo ? 'video/mp4' : 'audio/mp3',
       };
     }
 
-    console.log(`[Upload Optimization] File is large video (${(stats.size / 1024 / 1024).toFixed(2)} MB), extracting MP3 audio via ffmpeg...`);
+    console.log(`[Upload Optimization] File is video (${(stats.size / 1024 / 1024).toFixed(2)} MB), extracting MP3 audio via ffmpeg...`);
     const outputAudioPath = inputFilePath.replace(/\.[^/.]+$/, '_extracted.mp3');
 
-    // Run ffmpeg to extract lightweight mp3 audio
+    // Run ffmpeg to extract lightweight mp3 audio (128k, 44100Hz)
     const ffmpegCmd = `ffmpeg -y -i "${inputFilePath}" -vn -acodec libmp3lame -ab 128k -ar 44100 "${outputAudioPath}"`;
     await execPromise(ffmpegCmd, { timeout: 60000 });
 
     if (fs.existsSync(outputAudioPath) && fs.statSync(outputAudioPath).size > 1000) {
       const audioStats = fs.statSync(outputAudioPath);
       console.log(`[Upload Optimization] Successfully extracted audio: ${(audioStats.size / 1024 / 1024).toFixed(2)} MB (reduced from ${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-      // Delete heavy original video file
-      try {
-        fs.unlinkSync(inputFilePath);
-      } catch {}
+      if (deleteOriginal) {
+        try {
+          fs.unlinkSync(inputFilePath);
+        } catch {}
+      }
       return {
         filePath: outputAudioPath,
         mimeType: 'audio/mp3',
