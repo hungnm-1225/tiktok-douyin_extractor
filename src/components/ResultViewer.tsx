@@ -213,9 +213,17 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               ? 'bg-rose-100 text-rose-700 border-rose-200'
               : result.videoMetadata.platform === 'tiktok'
               ? 'bg-cyan-100 text-cyan-800 border-cyan-200'
-              : 'bg-purple-100 text-purple-700 border-purple-200'
+              : result.videoMetadata.mediaType === 'audio' || result.videoMetadata.mimeType?.startsWith('audio/')
+              ? 'bg-purple-100 text-purple-700 border-purple-200'
+              : 'bg-indigo-100 text-indigo-700 border-indigo-200'
           }`}>
-            {result.videoMetadata.platform === 'douyin' ? 'Douyin (抖音)' : result.videoMetadata.platform === 'tiktok' ? 'TikTok' : 'Media File'}
+            {result.videoMetadata.platform === 'douyin' 
+              ? 'Douyin (抖音)' 
+              : result.videoMetadata.platform === 'tiktok' 
+              ? 'TikTok' 
+              : result.videoMetadata.mediaType === 'audio' || result.videoMetadata.mimeType?.startsWith('audio/')
+              ? '🎵 Bản Ghi Âm Thanh'
+              : 'Video File'}
           </span>
 
           <span className={`px-3 py-1 rounded-full text-xs font-bold border shadow-2xs ${
@@ -223,7 +231,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
               : 'bg-indigo-100 text-indigo-800 border-indigo-200'
           }`}>
-            {isVietnamese ? '🇻🇳 Video Tiếng Việt' : `🇨🇳 ${result.sourceLanguageName} ➔ 🇻🇳 Tiếng Việt`}
+            {isVietnamese ? '🇻🇳 Tiếng Việt' : `🇨🇳 ${result.sourceLanguageName} ➔ 🇻🇳 Tiếng Việt`}
           </span>
         </div>
       </div>
@@ -297,6 +305,8 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               platform={result.videoMetadata.platform}
               duration={result.videoMetadata.duration}
               coverImage={result.videoMetadata.coverImage}
+              mimeType={result.videoMetadata.mimeType}
+              mediaType={result.videoMetadata.mediaType}
             />
           )}
         </div>
@@ -306,10 +316,10 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
       <div className="bg-white rounded-3xl border border-pink-100/90 pastel-shadow overflow-hidden">
         
         {/* Integrated Header: Action Buttons on top, then View Tabs & Search below */}
-        <div className="bg-[#FFF9FB] p-4 sm:p-5 border-b border-pink-100/80 space-y-3.5">
+        <div className="bg-[#FFF9FB] p-3.5 sm:p-5 border-b border-pink-100/80 space-y-3 sm:space-y-3.5">
           
           {/* Row 1: Action Toolbar directly connected to Script */}
-          <div className="flex items-center justify-between gap-3 flex-wrap pb-3 border-b border-pink-100/70">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pb-3 border-b border-pink-100/70">
             <div className="flex items-center flex-wrap gap-2">
               {/* 1. Main Copy Button */}
               {isVietnamese ? (
@@ -317,7 +327,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                   id="copy-vi-btn"
                   type="button"
                   onClick={() => handleCopy('vietnamese')}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
                 >
                   {copiedType === 'vietnamese' ? (
                     <>
@@ -336,7 +346,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                   id="copy-translated-vi-btn"
                   type="button"
                   onClick={() => handleCopy('vietnamese')}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm transition-all shadow-sm active:scale-95 cursor-pointer"
                 >
                   {copiedType === 'vietnamese' ? (
                     <>
@@ -359,7 +369,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                     id="copy-chinese-btn"
                     type="button"
                     onClick={() => handleCopy('chinese')}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs transition-all border border-rose-200 cursor-pointer"
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs transition-all border border-rose-200 cursor-pointer"
                   >
                     {copiedType === 'chinese' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-rose-600" />}
                     <span>Tiếng Trung Gốc</span>
@@ -368,7 +378,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                     id="copy-bilingual-btn"
                     type="button"
                     onClick={() => handleCopy('bilingual')}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-xs transition-all border border-purple-200 cursor-pointer"
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-xs transition-all border border-purple-200 cursor-pointer"
                   >
                     {copiedType === 'bilingual' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5 text-purple-600" />}
                     <span>Song Ngữ</span>
@@ -378,23 +388,23 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
             </div>
 
             {/* 2. Compact Download Dropdown Button */}
-            <div className="relative" ref={dropdownRef}>
+            <div className="relative w-full sm:w-auto" ref={dropdownRef}>
               <button
                 id="download-dropdown-btn"
                 type="button"
                 onClick={() => setIsDownloadDropdownOpen((prev) => !prev)}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-pink-100 via-purple-100 to-indigo-100 hover:from-pink-200 hover:via-purple-200 hover:to-indigo-200 text-purple-950 font-bold text-xs sm:text-sm border border-purple-200/80 shadow-xs transition-all active:scale-95 cursor-pointer"
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-pink-100 via-purple-100 to-indigo-100 hover:from-pink-200 hover:via-purple-200 hover:to-indigo-200 text-purple-950 font-bold text-xs sm:text-sm border border-purple-200/80 shadow-xs transition-all active:scale-95 cursor-pointer"
               >
                 <Download className="h-4 w-4 text-purple-700" />
                 <span>Xuất File / Tải Xuống</span>
                 <ChevronDown className={`h-4 w-4 text-purple-700 transition-transform duration-200 ${isDownloadDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Dropdown Menu Popup */}
+              {/* Dropdown Menu Popup (Responsive width & position) */}
               {isDownloadDropdownOpen && (
                 <div
                   id="download-dropdown-menu"
-                  className="absolute right-0 mt-2 w-72 bg-white rounded-2xl p-2 border border-pink-100 shadow-xl shadow-purple-900/10 z-30 space-y-1 animate-in fade-in zoom-in-95 duration-150"
+                  className="absolute right-0 mt-2 w-full sm:w-72 max-w-[calc(100vw-2rem)] bg-white rounded-2xl p-2 border border-pink-100 shadow-xl shadow-purple-900/10 z-30 space-y-1 animate-in fade-in zoom-in-95 duration-150"
                 >
                   {/* Option 1: Word .DOCX */}
                   <button
@@ -470,11 +480,11 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-0.5">
             
             {/* View Mode Switcher: Mốc Thời Gian vs Đoạn Văn Liền Mạch */}
-            <div className="flex items-center p-1 bg-white rounded-2xl border border-pink-200/60 shadow-xs flex-wrap gap-1">
+            <div className="flex items-center p-1 bg-white rounded-2xl border border-pink-200/60 shadow-xs w-full sm:w-auto">
               <button
                 type="button"
                 onClick={() => setViewMode('timestamps')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'timestamps'
                     ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-xs'
                     : 'text-slate-500 hover:text-slate-800'
@@ -487,7 +497,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               <button
                 type="button"
                 onClick={() => setViewMode('fulltext')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'fulltext'
                     ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-xs'
                     : 'text-slate-500 hover:text-slate-800'
@@ -674,7 +684,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
             isVietnamese ? (
               /* Vietnamese Timestamps View */
               <div className="divide-y divide-pink-50">
-                <div className="grid grid-cols-12 bg-[#FFF9FB] p-3 px-6 text-xs font-bold text-slate-500 border-b border-pink-100">
+                <div className="hidden sm:grid grid-cols-12 bg-[#FFF9FB] p-3 px-6 text-xs font-bold text-slate-500 border-b border-pink-100">
                   <div className="col-span-3 sm:col-span-2">Mốc Thời Gian</div>
                   <div className="col-span-9 sm:col-span-10">Lời Thoại Video</div>
                 </div>
@@ -687,15 +697,15 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                   filteredSegments.map((seg, idx) => (
                     <div
                       key={seg.id || idx}
-                      className="grid grid-cols-12 p-3.5 sm:px-6 gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
+                      className="flex flex-col sm:grid sm:grid-cols-12 p-3 sm:px-6 gap-2 sm:gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
                     >
-                      <div className="col-span-3 sm:col-span-2">
+                      <div className="sm:col-span-2 shrink-0">
                         {mediaSrc ? (
                           <button
                             type="button"
                             onClick={() => playerRef.current?.seekTo(seg.startSec)}
                             className="font-mono text-xs font-bold text-purple-800 bg-purple-50 hover:bg-pink-100 hover:text-pink-700 px-2.5 py-1 rounded-lg border border-purple-100 hover:border-pink-300 transition-all cursor-pointer inline-flex items-center gap-1 group/ts"
-                            title="Bấm để phát video tại mốc thời gian này"
+                            title="Bấm để phát media tại mốc thời gian này"
                           >
                             <Play className="h-3 w-3 text-pink-500 fill-pink-400 group-hover/ts:scale-110 transition-transform" />
                             <span>{seg.timestamp}</span>
@@ -706,7 +716,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                           </span>
                         )}
                       </div>
-                      <div className="col-span-9 sm:col-span-10 space-y-1">
+                      <div className="sm:col-span-10 w-full space-y-1">
                         {seg.speaker && (
                           <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 font-bold inline-block">
                             🗣️ {seg.speaker}
@@ -723,7 +733,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
             ) : (
               /* Foreign / Chinese Timestamps View */
               <div className="divide-y divide-pink-50">
-                <div className="grid grid-cols-12 bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 p-3.5 px-6 text-xs font-bold text-slate-700 border-b border-pink-100">
+                <div className="hidden sm:grid grid-cols-12 bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 p-3.5 px-6 text-xs font-bold text-slate-700 border-b border-pink-100">
                   <div className="col-span-12 sm:col-span-2 flex items-center gap-1 text-purple-900">
                     <Clock className="h-3.5 w-3.5 text-purple-600" />
                     <span>Thời Gian</span>
@@ -750,16 +760,16 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                   filteredSegments.map((seg, idx) => (
                     <div
                       key={seg.id || idx}
-                      className="grid grid-cols-12 p-3.5 sm:px-6 gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
+                      className="flex flex-col sm:grid sm:grid-cols-12 p-3 sm:px-6 gap-2 sm:gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
                     >
                       {/* Timestamp */}
-                      <div className="col-span-12 sm:col-span-2">
+                      <div className="sm:col-span-2 shrink-0">
                         {mediaSrc ? (
                           <button
                             type="button"
                             onClick={() => playerRef.current?.seekTo(seg.startSec)}
                             className="font-mono text-xs font-bold text-purple-800 bg-purple-50 hover:bg-pink-100 hover:text-pink-700 px-2.5 py-1 rounded-lg border border-purple-100 hover:border-pink-300 transition-all cursor-pointer inline-flex items-center gap-1 group/ts"
-                            title="Bấm để phát video tại mốc thời gian này"
+                            title="Bấm để phát media tại mốc thời gian này"
                           >
                             <Play className="h-3 w-3 text-pink-500 fill-pink-400 group-hover/ts:scale-110 transition-transform" />
                             <span>{seg.timestamp}</span>
@@ -773,9 +783,9 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
 
                       {/* Chinese Original */}
                       {langTab !== 'vietnamese_only' && (
-                        <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1`}>
+                        <div className={`w-full ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1`}>
                           <span className="sm:hidden text-[10px] font-bold text-rose-600 block uppercase">
-                            Gốc Tiếng Trung:
+                            🇨🇳 Gốc Tiếng Trung:
                           </span>
                           <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-normal">
                             {seg.originalText}
@@ -785,16 +795,16 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
 
                       {/* Vietnamese Translation */}
                       {langTab !== 'chinese_only' && (
-                        <div className={`col-span-12 ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1 sm:border-l sm:border-pink-50 sm:pl-3`}>
+                        <div className={`w-full ${langTab === 'bilingual' ? 'sm:col-span-5' : 'sm:col-span-10'} space-y-1 sm:border-l sm:border-pink-50 sm:pl-3`}>
                           <span className="sm:hidden text-[10px] font-bold text-indigo-600 block uppercase">
-                            Bản Dịch Tiếng Việt:
+                            🇻🇳 Bản Dịch Tiếng Việt:
                           </span>
                           {seg.speaker && (
                             <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 font-bold mb-1 inline-block">
                               🗣️ {seg.speaker}
                             </span>
                           )}
-                          <p className="text-xs sm:text-sm font-medium text-slate-900 leading-relaxed bg-pink-50/40 p-2.5 rounded-xl border border-pink-100/50">
+                          <p className="text-xs sm:text-sm font-medium text-slate-900 leading-relaxed bg-pink-50/40 p-2 sm:p-2.5 rounded-xl border border-pink-100/50">
                             {seg.translatedText || seg.vietnameseTranslation || seg.originalText}
                           </p>
                         </div>

@@ -33,6 +33,8 @@ interface CustomMediaPlayerProps {
   platform?: string;
   duration?: number;
   coverImage?: string;
+  mimeType?: string;
+  mediaType?: 'video' | 'audio';
 }
 
 function formatTime(seconds: number): string {
@@ -43,7 +45,7 @@ function formatTime(seconds: number): string {
 }
 
 export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPlayerProps>(
-  ({ src, title, platform, duration: initialDuration, coverImage }, ref) => {
+  ({ src, title, platform, duration: initialDuration, coverImage, mimeType, mediaType }, ref) => {
     const mediaRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const progressRef = useRef<HTMLDivElement>(null);
@@ -58,8 +60,17 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Determine if source is audio-only
-    const isAudioOnly = Boolean(src && (src.includes('.mp3') || src.includes('.wav') || src.includes('.m4a')));
+    // Robust audio detection: checks mediaType, mimeType, title extension, and src patterns
+    const isAudioOnly = Boolean(
+      mediaType === 'audio' ||
+      mimeType?.startsWith('audio/') ||
+      (title && /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(title)) ||
+      (src && (
+        /\.(mp3|wav|m4a|aac|ogg|flac|wma)(\?.*)?$/i.test(src) ||
+        src.includes('audio/') ||
+        src.includes('mime_type=audio')
+      ))
+    );
 
     // Expose control methods to parent (e.g., clicking on timestamps in the script)
     useImperativeHandle(ref, () => ({

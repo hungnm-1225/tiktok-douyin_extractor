@@ -18,6 +18,8 @@ export interface VideoMetadata {
   coverImage?: string;
   downloadUrl?: string;
   streamUrl?: string;
+  mimeType?: string;
+  mediaType?: 'video' | 'audio';
 }
 
 export interface ExtractionResult {

@@ -112,23 +112,23 @@ export const InputSection: React.FC<InputSectionProps> = ({
   return (
     <div id="input-section-container" className="space-y-6">
       {/* Main Input Card */}
-      <div className="bg-white rounded-3xl p-6 sm:p-8 border border-pink-100/80 pastel-shadow transition-all">
+      <div className="bg-white rounded-3xl p-4 sm:p-8 border border-pink-100/80 pastel-shadow transition-all">
         
         {/* Toggle Mode: Link URL vs File Upload */}
-        <div className="flex items-center justify-between pb-4 border-b border-pink-50 mb-5 flex-wrap gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-pink-50 mb-5 gap-3">
           <div className="flex items-center gap-2">
-            <span className="h-3 w-3 rounded-full bg-pink-400"></span>
+            <span className="h-3 w-3 rounded-full bg-pink-400 shrink-0"></span>
             <h2 className="text-base sm:text-lg font-bold text-slate-800">
               {isUploadMode ? 'Tải lên File Video / Audio' : 'Dán Link Video TikTok hoặc Douyin'}
             </h2>
           </div>
 
-          <div className="flex items-center p-1 bg-pink-50/80 rounded-2xl border border-pink-200/50">
+          <div className="flex items-center p-1 bg-pink-50/80 rounded-2xl border border-pink-200/50 w-full sm:w-auto">
             <button
               id="mode-link-btn"
               type="button"
               onClick={() => setIsUploadMode(false)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+              className={`flex-1 sm:flex-none px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-center ${
                 !isUploadMode
                   ? 'bg-white text-purple-700 shadow-sm'
                   : 'text-slate-500 hover:text-slate-700'
@@ -140,7 +140,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
               id="mode-upload-btn"
               type="button"
               onClick={() => setIsUploadMode(true)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+              className={`flex-1 sm:flex-none px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-center ${
                 isUploadMode
                   ? 'bg-white text-purple-700 shadow-sm'
                   : 'text-slate-500 hover:text-slate-700'
@@ -291,7 +291,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
         <div className="mt-4 pt-3 border-t border-pink-50 flex items-center justify-between flex-wrap gap-3">
           <label
             id="only-vietnamese-checkbox-label"
-            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer select-none transition-all border ${
+            className={`w-full sm:w-auto inline-flex items-start sm:items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-bold cursor-pointer select-none transition-all border ${
               onlyVietnamese
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 shadow-xs'
                 : 'bg-pink-50/50 text-slate-600 border-pink-100 hover:bg-pink-50'
@@ -302,9 +302,9 @@ export const InputSection: React.FC<InputSectionProps> = ({
               type="checkbox"
               checked={onlyVietnamese}
               onChange={(e) => setOnlyVietnamese(e.target.checked)}
-              className="h-4 w-4 rounded text-emerald-600 focus:ring-emerald-400 accent-emerald-600 cursor-pointer"
+              className="h-4 w-4 rounded text-emerald-600 focus:ring-emerald-400 accent-emerald-600 cursor-pointer mt-0.5 sm:mt-0 shrink-0"
             />
-            <span>🇻🇳 Chỉ lấy bản dịch Tiếng Việt (Bỏ qua tiếng gốc đối với video Douyin / Ngoại ngữ)</span>
+            <span className="leading-snug">🇻🇳 Chỉ lấy bản dịch Tiếng Việt (Bỏ qua tiếng gốc đối với video Douyin / Ngoại ngữ)</span>
           </label>
         </div>
 

@@ -321,7 +321,13 @@ export default function App() {
         }
 
         data.data.onlyVietnamese = onlyVietnamese;
-        // Attach local blob URL for instant smooth video playback in CustomMediaPlayer
+        const isAudio = Boolean(
+          file.type.startsWith('audio/') ||
+          /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(file.name)
+        );
+        data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
+        data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+        // Attach local blob URL for instant smooth video/audio playback in CustomMediaPlayer
         try {
           data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
         } catch {}

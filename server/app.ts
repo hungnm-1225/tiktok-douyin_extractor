@@ -251,6 +251,11 @@ app.post('/api/upload-media', async (req, res) => {
 
     const customApiKey = (req.headers['x-gemini-api-key'] as string) || req.body.customApiKey;
 
+    const isAudio = Boolean(
+      finalMimeType.startsWith('audio/') ||
+      /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(fileName || '')
+    );
+
     const result = await processMediaWithGemini({
       filePath: localTempPath,
       mimeType: finalMimeType,
@@ -258,9 +263,14 @@ app.post('/api/upload-media', async (req, res) => {
       videoMetadata: {
         url: 'local_upload',
         platform: 'upload',
-        title: title || fileName || 'Video/Audio Tải Lên',
+        title: title || fileName || (isAudio ? 'Tệp Ghi Âm Tải Lên' : 'Video Tải Lên'),
+        mimeType: finalMimeType,
+        mediaType: isAudio ? 'audio' : 'video',
       },
     });
+
+    result.videoMetadata.mimeType = finalMimeType;
+    result.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
 
     res.json({
       success: true,

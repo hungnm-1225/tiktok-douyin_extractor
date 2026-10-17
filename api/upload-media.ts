@@ -373,6 +373,11 @@ export default async function handler(req: any, res: any) {
     });
     const fullTranslation = parsed.fullTranslatedScript || parsed.fullVietnameseScript || (isVietnamese ? undefined : segments.map((s: any) => s.translatedText || s.originalText).join(' '));
 
+    const isAudio = Boolean(
+      (mimeType && mimeType.startsWith('audio/')) ||
+      /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(fileName || '')
+    );
+
     return res.status(200).json({
       success: true,
       data: {
@@ -385,7 +390,9 @@ export default async function handler(req: any, res: any) {
         videoMetadata: {
           url: 'local_upload',
           platform: 'upload',
-          title: title || fileName || 'Video/Audio Tải Lên',
+          title: title || fileName || (isAudio ? 'Tệp Ghi Âm Tải Lên' : 'Video Tải Lên'),
+          mimeType: mimeType || (isAudio ? 'audio/mp3' : 'video/mp4'),
+          mediaType: isAudio ? 'audio' : 'video',
         },
         createdAt: Date.now(),
         modelUsed: activeModel,

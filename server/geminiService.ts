@@ -173,6 +173,8 @@ interface ProcessMediaParams {
     title: string;
     author?: string;
     duration?: number;
+    mimeType?: string;
+    mediaType?: 'video' | 'audio';
   };
 }
 
