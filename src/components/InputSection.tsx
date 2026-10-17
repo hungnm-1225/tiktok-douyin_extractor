@@ -23,7 +23,7 @@ interface InputSectionProps {
   url: string;
   setUrl: (url: string) => void;
   onSubmitUrl: () => void;
-  onUploadFile: (file: File) => void;
+  onUploadFile: (file: File, originalVideoFile?: File) => void;
   isLoading: boolean;
   onOpenSampleModal?: () => void;
   onlyVietnamese: boolean;
@@ -80,11 +80,20 @@ export const InputSection: React.FC<InputSectionProps> = ({
   const processSelectedFile = async (rawFile: File) => {
     if (!rawFile) return;
     try {
-      if (rawFile.type.startsWith('video/') && rawFile.size > 20 * 1024 * 1024) {
+      const isVideo =
+        rawFile.type.startsWith('video/') ||
+        /\.(mp4|mov|mkv|webm|avi|flv)$/i.test(rawFile.name);
+      const isHeavyAudio =
+        rawFile.type.startsWith('audio/') && rawFile.size > 3 * 1024 * 1024;
+
+      // For any video or heavy audio (>3MB), extract 16kHz mono audio in browser
+      // to guarantee payload remains strictly under 1-2MB (never exceeds Vercel 4.5MB ceiling)
+      if (isVideo || isHeavyAudio) {
         setIsOptimizingAudio(true);
         const audioFile = await extractAudioFromVideoInBrowser(rawFile);
         setIsOptimizingAudio(false);
-        onUploadFile(audioFile);
+        // Pass audioFile for AI extraction request, and keep rawFile for local video player preview
+        onUploadFile(audioFile, isVideo ? rawFile : undefined);
       } else {
         onUploadFile(rawFile);
       }

@@ -283,7 +283,7 @@ export default function App() {
   };
 
   // Upload custom video/audio file
-  const handleUploadFile = (file: File) => {
+  const handleUploadFile = (file: File, originalVideoFile?: File) => {
     if (!file) return;
 
     setIsLoading(true);
@@ -293,17 +293,28 @@ export default function App() {
     reader.onload = async () => {
       try {
         const base64Data = reader.result as string;
+        const uploadFileName = (originalVideoFile || file).name;
+        const uploadTitle = uploadFileName.replace(/\.[^/.]+$/, '');
+
         const res = await fetch('/api/upload-media', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             base64Data,
-            fileName: file.name,
-            mimeType: file.type || 'audio/mp3',
-            title: file.name.replace(/\.[^/.]+$/, ''),
+            fileName: uploadFileName,
+            mimeType: file.type || 'audio/wav',
+            title: uploadTitle,
             onlyVietnamese,
           }),
         });
+
+        if (res.status === 413) {
+          throw {
+            code: 'PAYLOAD_TOO_LARGE',
+            message:
+              'Tệp tải lên vượt quá giới hạn 4.5MB của Vercel Serverless. Hệ thống đã tự động trích xuất âm thanh siêu nhẹ, bạn hãy thử tải lại nhé!',
+          };
+        }
 
         let data: any;
         const contentType = res.headers.get('content-type') || '';
@@ -311,6 +322,17 @@ export default function App() {
           data = await res.json();
         } else {
           const textErr = await res.text();
+          if (
+            textErr.includes('FUNCTION_PAYLOAD_TOO_LARGE') ||
+            textErr.includes('413') ||
+            textErr.includes('Payload Too Large')
+          ) {
+            throw {
+              code: 'PAYLOAD_TOO_LARGE',
+              message:
+                'Tệp vượt quá giới hạn 4.5MB của hạ tầng Vercel Serverless. Bạn hãy thử lại với video có thời lượng dưới 5 phút nhé!',
+            };
+          }
           throw new Error(textErr || `Lỗi phản hồi từ máy chủ (${res.status})`);
         }
 
@@ -321,16 +343,26 @@ export default function App() {
         }
 
         data.data.onlyVietnamese = onlyVietnamese;
-        const isAudio = Boolean(
-          file.type.startsWith('audio/') ||
-          /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(file.name)
-        );
-        data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
-        data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+        const isAudio =
+          !originalVideoFile &&
+          Boolean(
+            file.type.startsWith('audio/') ||
+            /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(file.name)
+          );
+        data.data.videoMetadata.mimeType = originalVideoFile
+          ? originalVideoFile.type || 'video/mp4'
+          : file.type || 'audio/wav';
+        data.data.videoMetadata.mediaType = originalVideoFile
+          ? 'video'
+          : isAudio
+          ? 'audio'
+          : 'video';
+
         // Attach local blob URL for instant smooth video/audio playback in CustomMediaPlayer
         try {
-          data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+          data.data.videoMetadata.streamUrl = URL.createObjectURL(originalVideoFile || file);
         } catch {}
+
         setCurrentResult(data.data);
         saveToHistory(data.data);
 
@@ -344,7 +376,16 @@ export default function App() {
         console.error('Upload extract error:', err);
         let code = err.code || 'UNKNOWN';
         let message = err.message || 'Lỗi xử lý file tải lên.';
-        if (message.includes('Failed to fetch')) {
+        if (
+          typeof message === 'string' &&
+          (message.includes('FUNCTION_PAYLOAD_TOO_LARGE') ||
+            message.includes('413') ||
+            message.includes('Payload Too Large'))
+        ) {
+          code = 'PAYLOAD_TOO_LARGE';
+          message =
+            'Tệp vượt quá giới hạn 4.5MB của hạ tầng Vercel Serverless. Bạn hãy thử lại với video có thời lượng ngắn hơn nhé!';
+        } else if (message.includes('Failed to fetch')) {
           code = 'NETWORK_ERROR';
           message = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
         }
@@ -413,9 +454,13 @@ export default function App() {
                   {errorState.code === 'RATE_LIMIT' && (
                     <span>⏳ Chạm Hạn Mức Tần Suất (Rate Limit 429)</span>
                   )}
+                  {errorState.code === 'PAYLOAD_TOO_LARGE' && (
+                    <span>⚠️ Tệp Tải Lên Quá Lớn Cho Vercel Serverless</span>
+                  )}
                   {errorState.code !== 'VIDEO_UNAVAILABLE' &&
                     errorState.code !== 'WAF_CHALLENGE_BLOCKED' &&
-                    errorState.code !== 'RATE_LIMIT' && (
+                    errorState.code !== 'RATE_LIMIT' &&
+                    errorState.code !== 'PAYLOAD_TOO_LARGE' && (
                       <span>Thông báo lỗi hệ thống:</span>
                     )}
                 </div>
