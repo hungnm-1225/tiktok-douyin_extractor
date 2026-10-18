@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import { del } from '@vercel/blob';
+import { del, get } from '@vercel/blob';
 
 export const config = {
   maxDuration: 60,
@@ -233,13 +233,31 @@ export default async function handler(req: any, res: any) {
 
   try {
     console.log(`[Vercel Blob Process] Fetching blob content: ${blobUrl}`);
-    const fileRes = await fetch(blobUrl);
-    if (!fileRes.ok) {
-      throw new Error(`Không thể đọc tệp từ kho lưu trữ Blob (${fileRes.status})`);
+    let buffer: Buffer;
+
+    try {
+      const fileRes = await fetch(blobUrl);
+      if (fileRes.ok) {
+        buffer = Buffer.from(await fileRes.arrayBuffer());
+      } else {
+        throw new Error(`Public fetch returned ${fileRes.status}`);
+      }
+    } catch {
+      // Fallback for Private Blob: use official get() with read-write token
+      console.log(`[Vercel Blob Process] Public fetch restricted, reading private blob with token...`);
+      const blobResult = await get(blobUrl, {
+        access: 'private',
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      });
+
+      if (!blobResult || !blobResult.stream) {
+        throw new Error('Không thể tải tệp từ kho lưu trữ Blob.');
+      }
+
+      const streamBuffer = await new Response(blobResult.stream).arrayBuffer();
+      buffer = Buffer.from(streamBuffer);
     }
 
-    const arrayBuffer = await fileRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
     const safeMimeType = mimeType || 'video/mp4';
 
     const mediaPart = {
