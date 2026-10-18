@@ -361,7 +361,7 @@ export default async function handler(req: any, res: any) {
     try {
       if (blobUrl) {
         console.log(`[Vercel Blob Cleanup] Deleting blob: ${blobUrl}`);
-        await del(blobUrl);
+        await del(blobUrl, { token: process.env.BLOB_READ_WRITE_TOKEN });
       }
     } catch (delErr) {
       console.warn('[Vercel Blob Cleanup Warning]:', delErr);
