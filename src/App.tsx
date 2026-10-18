@@ -225,7 +225,7 @@ export default function App() {
     if (!isValidMediaUrl(url)) {
       setErrorState({
         code: 'INVALID_URL',
-        message: 'Vui lòng nhập đúng đường link video từ TikTok hoặc Douyin (bắt đầu bằng https://...). Hệ thống không tìm kiếm theo từ khóa văn bản.',
+        message: 'Vui lòng dán đúng link TikTok hoặc Douyin.',
       });
       return;
     }
@@ -249,7 +249,7 @@ export default function App() {
         data = await res.json();
       } else {
         const textErr = await res.text();
-        throw new Error(textErr || `Lỗi phản hồi từ máy chủ (${res.status})`);
+        throw new Error(textErr || `Lỗi máy chủ (${res.status})`);
       }
 
       if (!res.ok || !data.success) {
@@ -274,7 +274,7 @@ export default function App() {
       let message = err.message || 'Đã có lỗi xảy ra khi bóc tách video.';
       if (message.includes('Failed to fetch')) {
         code = 'NETWORK_ERROR';
-        message = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
+        message = 'Mất kết nối mạng. Vui lòng thử lại sau.';
       }
       setErrorState({ code, message });
     } finally {
@@ -282,28 +282,102 @@ export default function App() {
     }
   };
 
-  // Upload custom video/audio file
-  const handleUploadFile = (file: File, originalVideoFile?: File) => {
+  // Upload custom video/audio file with Direct Google Cloud Upload (up to 2GB per file)
+  const handleUploadFile = async (file: File) => {
     if (!file) return;
 
     setIsLoading(true);
     setErrorState(null);
 
+    const isAudio = Boolean(
+      file.type.startsWith('audio/') ||
+      /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(file.name)
+    );
+
+    // Strategy 1: Direct Cloud Upload to Google Gemini (Up to 2GB, 0 Vercel payload!)
+    let directUploadSucceeded = false;
+    try {
+      const sessionRes = await fetch('/api/create-upload-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type || (isAudio ? 'audio/mp3' : 'video/mp4'),
+          size: file.size,
+        }),
+      });
+
+      if (sessionRes.ok) {
+        const sessionData = await sessionRes.json();
+        if (sessionData.success && sessionData.uploadUrl) {
+          // Stream raw binary directly from browser to Google Gemini Cloud
+          const googleUploadRes = await fetch(sessionData.uploadUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Length': String(file.size),
+              'X-Goog-Upload-Offset': '0',
+              'X-Goog-Upload-Command': 'upload, finalize',
+            },
+            body: file,
+          });
+
+          if (googleUploadRes.ok) {
+            const cloudData = await googleUploadRes.json();
+            if (cloudData.file?.uri) {
+              directUploadSucceeded = true;
+              const res = await fetch('/api/upload-media', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  fileUri: cloudData.file.uri,
+                  cloudFileName: cloudData.file.name,
+                  fileName: file.name,
+                  mimeType: file.type || (isAudio ? 'audio/mp3' : 'video/mp4'),
+                  title: file.name.replace(/\.[^/.]+$/, ''),
+                  onlyVietnamese,
+                }),
+              });
+
+              const data = await res.json();
+              if (!res.ok || !data.success) {
+                const errObj: any = new Error(data.error || 'Bóc tách tệp thất bại.');
+                errObj.code = data.errorCode;
+                throw errObj;
+              }
+
+              data.data.onlyVietnamese = onlyVietnamese;
+              data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
+              data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+              try {
+                data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+              } catch {}
+
+              setCurrentResult(data.data);
+              saveToHistory(data.data);
+              confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
+              setIsLoading(false);
+              return;
+            }
+          }
+        }
+      }
+    } catch (directErr) {
+      console.warn('[Direct Upload] Cloud stream error, falling back to local optimization:', directErr);
+    }
+
+    // Strategy 2: Fallback with browser audio compression if direct upload failed
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         const base64Data = reader.result as string;
-        const uploadFileName = (originalVideoFile || file).name;
-        const uploadTitle = uploadFileName.replace(/\.[^/.]+$/, '');
-
         const res = await fetch('/api/upload-media', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             base64Data,
-            fileName: uploadFileName,
-            mimeType: file.type || 'audio/wav',
-            title: uploadTitle,
+            fileName: file.name,
+            mimeType: file.type || (isAudio ? 'audio/mp3' : 'video/mp4'),
+            title: file.name.replace(/\.[^/.]+$/, ''),
             onlyVietnamese,
           }),
         });
@@ -311,8 +385,7 @@ export default function App() {
         if (res.status === 413) {
           throw {
             code: 'PAYLOAD_TOO_LARGE',
-            message:
-              'Tệp tải lên vượt quá giới hạn 4.5MB của Vercel Serverless. Hệ thống đã tự động trích xuất âm thanh siêu nhẹ, bạn hãy thử tải lại nhé!',
+            message: 'Tệp quá lớn (> 20 MB). Vui lòng thử video ngắn hơn hoặc chọn file MP3.',
           };
         }
 
@@ -321,73 +394,38 @@ export default function App() {
         if (contentType.includes('application/json')) {
           data = await res.json();
         } else {
-          const textErr = await res.text();
-          if (
-            textErr.includes('FUNCTION_PAYLOAD_TOO_LARGE') ||
-            textErr.includes('413') ||
-            textErr.includes('Payload Too Large')
-          ) {
-            throw {
-              code: 'PAYLOAD_TOO_LARGE',
-              message:
-                'Tệp vượt quá giới hạn 4.5MB của hạ tầng Vercel Serverless. Bạn hãy thử lại với video có thời lượng dưới 5 phút nhé!',
-            };
-          }
-          throw new Error(textErr || `Lỗi phản hồi từ máy chủ (${res.status})`);
+          throw {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: 'Tệp quá lớn (> 20 MB). Vui lòng thử video ngắn hơn hoặc chọn file MP3.',
+          };
         }
 
         if (!res.ok || !data.success) {
-          const errObj: any = new Error(data.error || 'Lỗi bóc tách file media.');
+          const errObj: any = new Error(data.error || 'Lỗi bóc tách tệp.');
           errObj.code = data.errorCode;
           throw errObj;
         }
 
         data.data.onlyVietnamese = onlyVietnamese;
-        const isAudio =
-          !originalVideoFile &&
-          Boolean(
-            file.type.startsWith('audio/') ||
-            /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(file.name)
-          );
-        data.data.videoMetadata.mimeType = originalVideoFile
-          ? originalVideoFile.type || 'video/mp4'
-          : file.type || 'audio/wav';
-        data.data.videoMetadata.mediaType = originalVideoFile
-          ? 'video'
-          : isAudio
-          ? 'audio'
-          : 'video';
-
-        // Attach local blob URL for instant smooth video/audio playback in CustomMediaPlayer
+        data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
+        data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
         try {
-          data.data.videoMetadata.streamUrl = URL.createObjectURL(originalVideoFile || file);
+          data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
         } catch {}
 
         setCurrentResult(data.data);
         saveToHistory(data.data);
-
-        confetti({
-          particleCount: 60,
-          spread: 70,
-          origin: { y: 0.6 },
-          colors: ['#F472B6', '#C084FC', '#818CF8'],
-        });
+        confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
       } catch (err: any) {
         console.error('Upload extract error:', err);
         let code = err.code || 'UNKNOWN';
-        let message = err.message || 'Lỗi xử lý file tải lên.';
-        if (
-          typeof message === 'string' &&
-          (message.includes('FUNCTION_PAYLOAD_TOO_LARGE') ||
-            message.includes('413') ||
-            message.includes('Payload Too Large'))
-        ) {
+        let message = err.message || 'Lỗi xử lý tệp tải lên.';
+        if (typeof message === 'string' && (message.includes('413') || message.includes('PAYLOAD_TOO_LARGE'))) {
           code = 'PAYLOAD_TOO_LARGE';
-          message =
-            'Tệp vượt quá giới hạn 4.5MB của hạ tầng Vercel Serverless. Bạn hãy thử lại với video có thời lượng ngắn hơn nhé!';
+          message = 'Tệp quá lớn (> 20 MB). Vui lòng thử video ngắn hơn hoặc chọn file MP3.';
         } else if (message.includes('Failed to fetch')) {
           code = 'NETWORK_ERROR';
-          message = 'Không thể kết nối tới máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại sau vài giây.';
+          message = 'Mất kết nối mạng. Vui lòng thử lại sau.';
         }
         setErrorState({ code, message });
       } finally {
@@ -396,7 +434,7 @@ export default function App() {
     };
 
     reader.onerror = () => {
-      setErrorState({ code: 'FILE_READ_ERROR', message: 'Không thể đọc file đã chọn từ máy tính của bạn.' });
+      setErrorState({ code: 'FILE_READ_ERROR', message: 'Không thể đọc tệp từ thiết bị của bạn.' });
       setIsLoading(false);
     };
 
@@ -423,55 +461,33 @@ export default function App() {
         {errorState && (
           <div
             id="error-status-alert-box"
-            className={`p-4 sm:p-5 rounded-2xl border text-xs sm:text-sm flex items-start justify-between gap-3 shadow-sm animate-in fade-in transition-all ${
+            className={`p-3.5 sm:p-4 rounded-2xl border text-xs sm:text-sm flex items-center justify-between gap-3 shadow-xs animate-in fade-in transition-all ${
               errorState.code === 'VIDEO_UNAVAILABLE'
-                ? 'bg-amber-50/90 border-amber-200 text-amber-900'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
                 : errorState.code === 'WAF_CHALLENGE_BLOCKED'
-                ? 'bg-purple-50/90 border-purple-200 text-purple-950'
+                ? 'bg-purple-50 border-purple-200 text-purple-950'
                 : errorState.code === 'RATE_LIMIT'
-                ? 'bg-blue-50/90 border-blue-200 text-blue-900'
-                : 'bg-rose-50/90 border-rose-200 text-rose-900'
+                ? 'bg-blue-50 border-blue-200 text-blue-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
             }`}
           >
-            <div className="flex items-start gap-3 flex-1">
+            <div className="flex items-center gap-2.5 min-w-0">
               {errorState.code === 'VIDEO_UNAVAILABLE' ? (
-                <AlertOctagon className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <AlertOctagon className="h-4 w-4 sm:h-5 sm:w-5 text-amber-600 shrink-0" />
               ) : errorState.code === 'WAF_CHALLENGE_BLOCKED' ? (
-                <ShieldAlert className="h-5 w-5 text-purple-600 shrink-0 mt-0.5" />
+                <ShieldAlert className="h-4 w-4 sm:h-5 sm:w-5 text-purple-600 shrink-0" />
               ) : errorState.code === 'RATE_LIMIT' ? (
-                <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+                <Clock className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600 shrink-0" />
               ) : (
-                <AlertCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
+                <AlertCircle className="h-4 w-4 sm:h-5 sm:w-5 text-rose-500 shrink-0" />
               )}
-              <div className="space-y-1">
-                <div className="font-extrabold flex items-center gap-1.5 text-xs sm:text-sm">
-                  {errorState.code === 'VIDEO_UNAVAILABLE' && (
-                    <span>🚫 Video Không Khả Dụng (Đã bị xóa hoặc để riêng tư)</span>
-                  )}
-                  {errorState.code === 'WAF_CHALLENGE_BLOCKED' && (
-                    <span>🛡️ Tường Lửa Nền Tảng Hạn Chế Máy Chủ</span>
-                  )}
-                  {errorState.code === 'RATE_LIMIT' && (
-                    <span>⏳ Chạm Hạn Mức Tần Suất (Rate Limit 429)</span>
-                  )}
-                  {errorState.code === 'PAYLOAD_TOO_LARGE' && (
-                    <span>⚠️ Tệp Tải Lên Quá Lớn Cho Vercel Serverless</span>
-                  )}
-                  {errorState.code !== 'VIDEO_UNAVAILABLE' &&
-                    errorState.code !== 'WAF_CHALLENGE_BLOCKED' &&
-                    errorState.code !== 'RATE_LIMIT' &&
-                    errorState.code !== 'PAYLOAD_TOO_LARGE' && (
-                      <span>Thông báo lỗi hệ thống:</span>
-                    )}
-                </div>
-                <p className="leading-relaxed text-xs sm:text-sm font-medium">
-                  {errorState.message}
-                </p>
-              </div>
+              <span className="font-bold text-xs sm:text-sm leading-snug truncate sm:whitespace-normal">
+                {errorState.message}
+              </span>
             </div>
             <button
               onClick={() => setErrorState(null)}
-              className="text-xs font-bold text-slate-500 hover:text-slate-800 underline shrink-0 cursor-pointer p-1"
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 underline shrink-0 cursor-pointer px-1 py-0.5"
             >
               Đóng
             </button>

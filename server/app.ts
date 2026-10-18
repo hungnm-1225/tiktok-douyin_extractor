@@ -73,6 +73,69 @@ app.get('/api/stream-media', (req, res) => {
   }
 });
 
+// API 2.7: Create direct resumable upload session for Google Gemini File API (up to 2GB per file)
+app.post('/api/create-upload-session', async (req, res) => {
+  try {
+    const { fileName, mimeType, size } = req.body || {};
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        error: 'Chưa cấu hình GEMINI_API_KEY trên máy chủ.',
+      });
+    }
+
+    const initUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
+    const safeMimeType = mimeType || 'video/mp4';
+    const safeLength = size ? String(size) : '0';
+
+    const googleRes = await fetch(initUrl, {
+      method: 'POST',
+      headers: {
+        'X-Goog-Upload-Protocol': 'resumable',
+        'X-Goog-Upload-Command': 'start',
+        'X-Goog-Upload-Header-Content-Length': safeLength,
+        'X-Goog-Upload-Header-Content-Type': safeMimeType,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file: {
+          display_name: fileName || 'Uploaded Media',
+        },
+      }),
+    });
+
+    if (!googleRes.ok) {
+      const errText = await googleRes.text();
+      console.error('[Create Upload Session Error]:', googleRes.status, errText);
+      return res.status(502).json({
+        success: false,
+        error: 'Không thể khởi tạo phiên tải lên Google Cloud.',
+      });
+    }
+
+    const uploadUrl = googleRes.headers.get('x-goog-upload-url');
+    if (!uploadUrl) {
+      return res.status(502).json({
+        success: false,
+        error: 'Google không trả về đường dẫn tải tệp trực tiếp.',
+      });
+    }
+
+    res.json({
+      success: true,
+      uploadUrl,
+    });
+  } catch (err: any) {
+    console.error('[Create Upload Session Exception]:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Lỗi khởi tạo tải tệp.',
+    });
+  }
+});
+
 // API 3: Extract script from TikTok / Douyin URL
 app.post('/api/extract', async (req, res) => {
   let localTempPath: string | undefined;
@@ -223,53 +286,71 @@ app.post('/api/upload-media', async (req, res) => {
   let localTempPath: string | undefined;
 
   try {
-    const { base64Data, fileName, mimeType, title } = req.body;
+    const { base64Data, fileUri, cloudFileName, fileName, mimeType, title } = req.body || {};
 
-    if (!base64Data) {
+    if (!base64Data && !fileUri) {
       return res.status(400).json({
         success: false,
         error: 'Thiếu dữ liệu file tải lên.',
       });
     }
 
-    // Save base64 to temp file
-    const fileId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const ext = fileName?.split('.').pop() || (mimeType?.includes('audio') ? 'mp3' : 'mp4');
-    localTempPath = path.join(os.tmpdir(), `upload_${fileId}.${ext}`);
-
-    const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
-    const buffer = Buffer.from(base64Clean, 'base64');
-    const fs = await import('fs');
-    fs.writeFileSync(localTempPath, buffer);
-
-    console.log(`[API /api/upload-media] Saved uploaded file to temp: ${localTempPath} (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-    // If uploaded file is a heavy video (> 15MB), extract audio track via ffmpeg to keep Gemini request lightweight & fast
-    const optimized = await extractAudioIfVideoTooLarge(localTempPath);
-    localTempPath = optimized.filePath;
-    const finalMimeType = optimized.mimeType || mimeType || 'audio/mp3';
-
     const customApiKey = (req.headers['x-gemini-api-key'] as string) || req.body.customApiKey;
 
     const isAudio = Boolean(
-      finalMimeType.startsWith('audio/') ||
+      (mimeType && mimeType.startsWith('audio/')) ||
       /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(fileName || '')
     );
 
-    const result = await processMediaWithGemini({
-      filePath: localTempPath,
-      mimeType: finalMimeType,
-      customApiKey,
-      videoMetadata: {
-        url: 'local_upload',
-        platform: 'upload',
-        title: title || fileName || (isAudio ? 'Tệp Ghi Âm Tải Lên' : 'Video Tải Lên'),
-        mimeType: finalMimeType,
-        mediaType: isAudio ? 'audio' : 'video',
-      },
-    });
+    let result;
 
-    result.videoMetadata.mimeType = finalMimeType;
+    if (fileUri) {
+      // Direct Cloud Upload Mode: file uploaded directly to Google Gemini Cloud (up to 2GB)
+      result = await processMediaWithGemini({
+        fileUri,
+        cloudFileName,
+        mimeType: mimeType || (isAudio ? 'audio/mp3' : 'video/mp4'),
+        customApiKey,
+        videoMetadata: {
+          url: 'local_upload',
+          platform: 'upload',
+          title: title || fileName || (isAudio ? 'Tệp Ghi Âm Tải Lên' : 'Video Tải Lên'),
+          mimeType: mimeType || (isAudio ? 'audio/mp3' : 'video/mp4'),
+          mediaType: isAudio ? 'audio' : 'video',
+        },
+      });
+    } else {
+      // Legacy Base64 Mode
+      const fileId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const ext = fileName?.split('.').pop() || (mimeType?.includes('audio') ? 'mp3' : 'mp4');
+      localTempPath = path.join(os.tmpdir(), `upload_${fileId}.${ext}`);
+
+      const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(base64Clean, 'base64');
+      const fs = await import('fs');
+      fs.writeFileSync(localTempPath, buffer);
+
+      console.log(`[API /api/upload-media] Saved uploaded file to temp: ${localTempPath} (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+      const optimized = await extractAudioIfVideoTooLarge(localTempPath);
+      localTempPath = optimized.filePath;
+      const finalMimeType = optimized.mimeType || mimeType || 'audio/mp3';
+
+      result = await processMediaWithGemini({
+        filePath: localTempPath,
+        mimeType: finalMimeType,
+        customApiKey,
+        videoMetadata: {
+          url: 'local_upload',
+          platform: 'upload',
+          title: title || fileName || (isAudio ? 'Tệp Ghi Âm Tải Lên' : 'Video Tải Lên'),
+          mimeType: finalMimeType,
+          mediaType: isAudio ? 'audio' : 'video',
+        },
+      });
+    }
+
+    result.videoMetadata.mimeType = mimeType || (isAudio ? 'audio/mp3' : 'video/mp4');
     result.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
 
     res.json({

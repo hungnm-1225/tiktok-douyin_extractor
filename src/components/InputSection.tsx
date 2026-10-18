@@ -7,7 +7,11 @@ import {
   Clipboard, 
   Check, 
   Languages,
-  Loader2
+  Loader2,
+  FileVideo,
+  FileAudio,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 import { extractAudioFromVideoInBrowser } from '../utils/exportUtils';
 
@@ -43,6 +47,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
   const [isUploadMode, setIsUploadMode] = useState<boolean>(false);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isOptimizingAudio, setIsOptimizingAudio] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,44 +82,30 @@ export const InputSection: React.FC<InputSectionProps> = ({
     }
   };
 
-  const processSelectedFile = async (rawFile: File) => {
-    if (!rawFile) return;
-    try {
-      const isVideo =
-        rawFile.type.startsWith('video/') ||
-        /\.(mp4|mov|mkv|webm|avi|flv)$/i.test(rawFile.name);
-      const isHeavyAudio =
-        rawFile.type.startsWith('audio/') && rawFile.size > 3 * 1024 * 1024;
-
-      // For any video or heavy audio (>3MB), extract 16kHz mono audio in browser
-      // to guarantee payload remains strictly under 1-2MB (never exceeds Vercel 4.5MB ceiling)
-      if (isVideo || isHeavyAudio) {
-        setIsOptimizingAudio(true);
-        const audioFile = await extractAudioFromVideoInBrowser(rawFile);
-        setIsOptimizingAudio(false);
-        // Pass audioFile for AI extraction request, and keep rawFile for local video player preview
-        onUploadFile(audioFile, isVideo ? rawFile : undefined);
-      } else {
-        onUploadFile(rawFile);
-      }
-    } catch {
-      setIsOptimizingAudio(false);
-      onUploadFile(rawFile);
-    }
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      await processSelectedFile(e.dataTransfer.files[0]);
+      setSelectedFile(e.dataTransfer.files[0]);
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      await processSelectedFile(e.target.files[0]);
+      setSelectedFile(e.target.files[0]);
+    }
+  };
+
+  const handleStartExtraction = () => {
+    if (isUploadMode) {
+      if (selectedFile) {
+        onUploadFile(selectedFile);
+      }
+    } else {
+      if (isValidMediaUrl(url)) {
+        onSubmitUrl();
+      }
     }
   };
 
@@ -255,44 +246,83 @@ export const InputSection: React.FC<InputSectionProps> = ({
             </div>
           </div>
         ) : (
-          /* Mode 2: Direct File Upload */
-          <div
-            id="file-dropzone"
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
-              dragActive
-                ? 'border-purple-400 bg-purple-50/60 scale-[1.01]'
-                : 'border-pink-200 hover:border-pink-300 bg-[#FFF9FB]/80'
-            }`}
-          >
+          /* Mode 2: Direct File Upload with Required File Selection & Preview */
+          <div>
             <input
               ref={fileInputRef}
               type="file"
-              accept="video/mp4,video/quicktime,video/webm,audio/mp3,audio/mpeg,audio/m4a,audio/wav"
+              accept="video/mp4,video/quicktime,video/webm,video/x-matroska,audio/mp3,audio/mpeg,audio/m4a,audio/wav,audio/aac"
               onChange={handleFileChange}
               className="hidden"
             />
-            <div className="max-w-md mx-auto space-y-2.5">
-              <div className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-pink-200 to-purple-200 text-purple-700 mx-auto flex items-center justify-center shadow-sm">
-                {isOptimizingAudio ? (
-                  <Loader2 className="h-6 w-6 animate-spin text-purple-600" />
-                ) : (
-                  <UploadCloud className="h-6 w-6" />
-                )}
+
+            {!selectedFile ? (
+              /* Dropzone when no file selected */
+              <div
+                id="file-dropzone"
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all ${
+                  dragActive
+                    ? 'border-purple-400 bg-purple-50/60 scale-[1.01]'
+                    : 'border-pink-200 hover:border-pink-300 bg-[#FFF9FB]/80'
+                }`}
+              >
+                <div className="max-w-md mx-auto space-y-2.5">
+                  <div className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-pink-200 to-purple-200 text-purple-700 mx-auto flex items-center justify-center shadow-sm">
+                    <UploadCloud className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-700">
+                    Kéo thả hoặc nhấp để chọn file video/audio
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Hỗ trợ tệp MP4, MOV, MP3, M4A, WAV (tải trực tiếp lên Google Gemini Cloud lên tới 2GB).
+                  </p>
+                </div>
               </div>
-              <h3 className="text-sm sm:text-base font-bold text-slate-700">
-                {isOptimizingAudio
-                  ? 'Đang tự động tách âm thanh từ video lớn (giảm 95% dung lượng)...'
-                  : 'Kéo thả hoặc nhấp để chọn file video/audio'}
-              </h3>
-              <p className="text-xs text-slate-500">
-                Hỗ trợ MP4, MOV, MP3, M4A, WAV (video lớn sẽ tự động trích xuất âm thanh siêu nhẹ gửi AI từ A-Z).
-              </p>
-            </div>
+            ) : (
+              /* Selected File Preview Card */
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-pink-50/90 via-purple-50/70 to-indigo-50/70 border border-pink-200/80 shadow-xs flex items-center justify-between gap-3 animate-in fade-in">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-11 w-11 rounded-xl bg-white text-purple-700 flex items-center justify-center shadow-xs shrink-0">
+                    {selectedFile.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(selectedFile.name) ? (
+                      <FileAudio className="h-6 w-6 text-purple-600" />
+                    ) : (
+                      <FileVideo className="h-6 w-6 text-pink-600" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-white text-purple-800 border border-purple-200">
+                        {selectedFile.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(selectedFile.name) ? 'Âm thanh' : 'Video'}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                      </span>
+                    </div>
+                    <h4 className="text-xs sm:text-sm font-bold text-slate-800 truncate mt-0.5">
+                      {selectedFile.name}
+                    </h4>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-pink-600 hover:text-pink-800 px-3 py-1.5 rounded-xl bg-white hover:bg-pink-100/60 border border-pink-200/60 transition-colors shrink-0 cursor-pointer"
+                  title="Chọn tệp khác"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Đổi tệp</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -322,10 +352,10 @@ export const InputSection: React.FC<InputSectionProps> = ({
           <button
             id="start-extract-btn"
             type="button"
-            disabled={isLoading || (!isUploadMode && !isValidMediaUrl(url))}
-            onClick={onSubmitUrl}
+            disabled={isLoading || (!isUploadMode && !isValidMediaUrl(url)) || (isUploadMode && !selectedFile)}
+            onClick={handleStartExtraction}
             className={`w-full py-4 px-6 rounded-2xl font-bold text-sm sm:text-base flex items-center justify-center gap-2.5 transition-all duration-300 shadow-md ${
-              isLoading || (!isUploadMode && !isValidMediaUrl(url))
+              isLoading || (!isUploadMode && !isValidMediaUrl(url)) || (isUploadMode && !selectedFile)
                 ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 : 'bg-gradient-to-r from-pink-300 via-purple-300 to-indigo-300 hover:from-pink-400 hover:via-purple-400 hover:to-indigo-400 text-purple-950 hover:shadow-lg hover:shadow-pink-200/60 active:scale-[0.99] cursor-pointer'
             }`}
@@ -334,6 +364,8 @@ export const InputSection: React.FC<InputSectionProps> = ({
             <span>
               {isLoading
                 ? 'Đang lắng nghe và bóc tách kịch bản...'
+                : isUploadMode && !selectedFile
+                ? 'Vui lòng chọn video hoặc audio'
                 : 'Bóc Tách Kịch Bản Ngay'}
             </span>
           </button>

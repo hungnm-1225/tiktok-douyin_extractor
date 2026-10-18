@@ -164,7 +164,9 @@ Nhiệm vụ trọng tâm:
 4. Cung cấp toàn bộ kịch bản liền mạch (Full text).`;
 
 interface ProcessMediaParams {
-  filePath: string;
+  filePath?: string;
+  fileUri?: string;
+  cloudFileName?: string;
   mimeType: string;
   customApiKey?: string;
   videoMetadata: {
@@ -180,6 +182,8 @@ interface ProcessMediaParams {
 
 export async function processMediaWithGemini({
   filePath,
+  fileUri,
+  cloudFileName,
   mimeType,
   customApiKey,
   videoMetadata,
@@ -188,43 +192,58 @@ export async function processMediaWithGemini({
   let uploadedCloudFile: any = null;
 
   try {
-    const stats = fs.statSync(filePath);
-    const fileSizeInMB = stats.size / (1024 * 1024);
-    console.log(`[Gemini Pipeline] Processing media: ${filePath} (${fileSizeInMB.toFixed(2)} MB, ${mimeType})`);
-
     let mediaPart: any;
 
-    if (fileSizeInMB <= 20) {
-      console.log(`[Gemini Pipeline] Using zero-latency inlineData audio buffer`);
-      const buffer = fs.readFileSync(filePath);
-      const base64Data = buffer.toString('base64');
-      mediaPart = {
-        inlineData: {
-          mimeType: mimeType || 'audio/mp3',
-          data: base64Data,
-        },
-      };
-    } else {
-      console.log(`[Gemini Pipeline] Uploading to File API (${fileSizeInMB.toFixed(2)} MB)`);
-      uploadedCloudFile = await ai.files.upload({
-        file: filePath,
-      });
-
-      let fileState = uploadedCloudFile.state;
-      let attempts = 0;
-      while (fileState === 'PROCESSING' && attempts < 10) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const checked = await ai.files.get({ name: uploadedCloudFile.name });
-        fileState = checked.state;
-        attempts++;
-      }
-
+    if (fileUri) {
+      console.log(`[Gemini Pipeline] Processing direct cloud file: ${fileUri} (${mimeType})`);
       mediaPart = {
         fileData: {
-          fileUri: uploadedCloudFile.uri,
-          mimeType: uploadedCloudFile.mimeType || mimeType,
+          fileUri,
+          mimeType: mimeType || 'video/mp4',
         },
       };
+      if (cloudFileName) {
+        uploadedCloudFile = { name: cloudFileName };
+      }
+    } else if (filePath) {
+      const stats = fs.statSync(filePath);
+      const fileSizeInMB = stats.size / (1024 * 1024);
+      console.log(`[Gemini Pipeline] Processing media: ${filePath} (${fileSizeInMB.toFixed(2)} MB, ${mimeType})`);
+
+      if (fileSizeInMB <= 20) {
+        console.log(`[Gemini Pipeline] Using zero-latency inlineData audio buffer`);
+        const buffer = fs.readFileSync(filePath);
+        const base64Data = buffer.toString('base64');
+        mediaPart = {
+          inlineData: {
+            mimeType: mimeType || 'audio/mp3',
+            data: base64Data,
+          },
+        };
+      } else {
+        console.log(`[Gemini Pipeline] Uploading to File API (${fileSizeInMB.toFixed(2)} MB)`);
+        uploadedCloudFile = await ai.files.upload({
+          file: filePath,
+        });
+
+        let fileState = uploadedCloudFile.state;
+        let attempts = 0;
+        while (fileState === 'PROCESSING' && attempts < 10) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const checked = await ai.files.get({ name: uploadedCloudFile.name });
+          fileState = checked.state;
+          attempts++;
+        }
+
+        mediaPart = {
+          fileData: {
+            fileUri: uploadedCloudFile.uri,
+            mimeType: uploadedCloudFile.mimeType || mimeType,
+          },
+        };
+      }
+    } else {
+      throw new Error('Thiếu đường dẫn tệp hoặc fileUri.');
     }
 
     const taskPrompt = `Hãy bóc tách toàn bộ kịch bản video này:

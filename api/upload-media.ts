@@ -250,22 +250,14 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const { base64Data, fileName, mimeType, title } = body || {};
+    const { base64Data, fileUri, cloudFileName, fileName, mimeType, title } = body || {};
 
-    if (!base64Data) {
+    if (!base64Data && !fileUri) {
       return res.status(400).json({
         success: false,
-        error: 'Thiếu dữ liệu file tải lên.',
+        error: 'Thiếu dữ liệu tệp tải lên.',
       });
     }
-
-    const fileId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const ext = fileName?.split('.').pop() || (mimeType?.includes('audio') ? 'mp3' : 'mp4');
-    localTempPath = path.join(os.tmpdir(), `upload_${fileId}.${ext}`);
-
-    const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
-    const buffer = Buffer.from(base64Clean, 'base64');
-    fs.writeFileSync(localTempPath, buffer);
 
     const apiKey =
       (req.headers['x-gemini-api-key'] as string) ||
@@ -274,9 +266,9 @@ export default async function handler(req: any, res: any) {
       process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      return res.status(400).json({
+      return res.status(500).json({
         success: false,
-        error: 'Chưa cấu hình GEMINI_API_KEY. Vui lòng bấm nút [API Key] trên header để nhập API Key.',
+        error: 'Chưa cấu hình GEMINI_API_KEY trên máy chủ.',
       });
     }
 
@@ -285,31 +277,53 @@ export default async function handler(req: any, res: any) {
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
 
-    // Prepare mediaPart for Gemini generateContent
-    const fileStats = fs.statSync(localTempPath);
-    const fileSizeInMB = fileStats.size / (1024 * 1024);
     let mediaPart: any;
     let uploadedFileRef: any = null;
 
-    if (fileSizeInMB <= 20) {
-      mediaPart = {
-        inlineData: {
-          mimeType: mimeType || 'audio/mp3',
-          data: base64Clean,
-        },
-      };
-    } else {
-      uploadedFileRef = await ai.files.upload({
-        file: localTempPath,
-        mimeType: mimeType || 'audio/mp3',
-      } as any);
-
+    if (fileUri) {
+      // Direct Cloud Upload Mode: file is already on Google Gemini Cloud (up to 2GB, 0 Vercel payload!)
       mediaPart = {
         fileData: {
-          fileUri: uploadedFileRef.uri,
-          mimeType: uploadedFileRef.mimeType || mimeType || 'audio/mp3',
+          fileUri,
+          mimeType: mimeType || 'video/mp4',
         },
       };
+      if (cloudFileName) {
+        uploadedFileRef = { name: cloudFileName };
+      }
+    } else {
+      // Legacy Base64 Mode
+      const fileId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const ext = fileName?.split('.').pop() || (mimeType?.includes('audio') ? 'mp3' : 'mp4');
+      localTempPath = path.join(os.tmpdir(), `upload_${fileId}.${ext}`);
+
+      const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(base64Clean, 'base64');
+      fs.writeFileSync(localTempPath, buffer);
+
+      const fileStats = fs.statSync(localTempPath);
+      const fileSizeInMB = fileStats.size / (1024 * 1024);
+
+      if (fileSizeInMB <= 20) {
+        mediaPart = {
+          inlineData: {
+            mimeType: mimeType || 'audio/mp3',
+            data: base64Clean,
+          },
+        };
+      } else {
+        uploadedFileRef = await ai.files.upload({
+          file: localTempPath,
+          mimeType: mimeType || 'audio/mp3',
+        } as any);
+
+        mediaPart = {
+          fileData: {
+            fileUri: uploadedFileRef.uri,
+            mimeType: uploadedFileRef.mimeType || mimeType || 'audio/mp3',
+          },
+        };
+      }
     }
 
     let activeModel = CANDIDATE_MODELS[0];
