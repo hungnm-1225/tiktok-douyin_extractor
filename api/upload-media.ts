@@ -178,14 +178,10 @@ export default async function handler(request: any, response: any) {
       const jsonResponse = await handleUpload({
         body: body as HandleUploadBody,
         request,
-        onBeforeGenerateToken: async () => {
+        onBeforeGenerateToken: async (pathname: string) => {
           return {
-            allowedContentTypes: [
-              'video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska',
-              'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/wav', 'audio/aac', 'audio/ogg'
-            ],
-            maximumSizeInBytes: 500 * 1024 * 1024,
-            tokenPayload: JSON.stringify({}),
+            maximumSizeInBytes: 500 * 1024 * 1024, // 500MB
+            tokenPayload: JSON.stringify({ pathname }),
           };
         },
         onUploadCompleted: async ({ blob }) => {

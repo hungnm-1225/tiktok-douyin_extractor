@@ -299,7 +299,8 @@ export default function App() {
     // Strategy 1: Vercel Blob Client Upload (Direct from Browser to Vercel Blob, up to 500MB, 0 Payload!)
     try {
       console.log('[Vercel Blob] Uploading directly from browser...');
-      const newBlob = await upload(file.name, file, {
+      const safePathname = file.name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'media_upload.mp4';
+      const newBlob = await upload(safePathname, file, {
         access: 'public',
         handleUploadUrl: '/api/upload-media',
       });
