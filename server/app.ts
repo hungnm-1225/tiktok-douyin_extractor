@@ -371,5 +371,69 @@ app.post('/api/upload-media', async (req, res) => {
   }
 });
 
+// API 5: Process media from Vercel Blob URL directly
+app.post('/api/process-blob', async (req, res) => {
+  const { blobUrl, fileName, mimeType, title } = req.body || {};
+
+  if (!blobUrl) {
+    return res.status(400).json({ success: false, error: 'Thiếu đường dẫn Blob URL.' });
+  }
+
+  const customApiKey = (req.headers['x-gemini-api-key'] as string) || req.body.customApiKey;
+
+  try {
+    console.log(`[API /api/process-blob] Fetching blob stream: ${blobUrl}`);
+    const fileRes = await fetch(blobUrl);
+    if (!fileRes.ok) {
+      throw new Error(`Không thể đọc file từ Blob storage (${fileRes.status})`);
+    }
+
+    const arrayBuffer = await fileRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const safeMimeType = mimeType || 'video/mp4';
+
+    const tempFileId = `blob_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const ext = fileName?.split('.').pop() || (safeMimeType.includes('audio') ? 'mp3' : 'mp4');
+    const tempFilePath = path.join(os.tmpdir(), `${tempFileId}.${ext}`);
+    fs.writeFileSync(tempFilePath, buffer);
+
+    const isAudio = Boolean(
+      safeMimeType.startsWith('audio/') ||
+      /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(fileName || '')
+    );
+
+    const result = await processMediaWithGemini({
+      filePath: tempFilePath,
+      mimeType: safeMimeType,
+      customApiKey,
+      videoMetadata: {
+        url: 'local_upload',
+        platform: 'upload',
+        title: title || fileName || (isAudio ? 'Tệp Ghi Âm Tải Lên' : 'Video Tải Lên'),
+        mimeType: safeMimeType,
+        mediaType: isAudio ? 'audio' : 'video',
+      },
+    });
+
+    cleanupLocalTempFile(tempFilePath);
+
+    // Clean up Vercel Blob if token available
+    try {
+      const { del } = await import('@vercel/blob');
+      await del(blobUrl);
+      console.log(`[Vercel Blob Cleanup] Deleted blob: ${blobUrl}`);
+    } catch {}
+
+    res.json({
+      success: true,
+      data: result,
+      message: 'Bóc tách file thành công với Gemini! ✨',
+    });
+  } catch (error: any) {
+    console.error('[API /api/process-blob Error]:', error);
+    res.status(500).json({ success: false, error: error.message || 'Lỗi xử lý file blob.' });
+  }
+});
+
 export default app;
 export { app };

@@ -13,6 +13,8 @@ import { SampleModal } from './components/SampleModal';
 import { ExtractionResult, SampleVideoItem } from './types';
 import { AlertCircle, Sparkles, AlertOctagon, ShieldAlert, Clock, RefreshCw } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { upload } from '@vercel/blob/client';
+import { extractAudioFromVideoInBrowser } from './utils/exportUtils';
 
 const LOCAL_STORAGE_HISTORY_KEY = 'tiktok_douyin_script_history_v2';
 
@@ -282,7 +284,7 @@ export default function App() {
     }
   };
 
-  // Upload custom video/audio file with Direct Google Cloud Upload (up to 2GB per file)
+  // Upload custom video/audio file with Vercel Blob Client Upload (up to 500MB) & Browser Audio Fallback
   const handleUploadFile = async (file: File) => {
     if (!file) return;
 
@@ -294,87 +296,21 @@ export default function App() {
       /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i.test(file.name)
     );
 
-    // Strategy 1: Direct Cloud Upload to Google Gemini (Up to 2GB, 0 Vercel payload!)
-    let directUploadSucceeded = false;
+    // Strategy 1: Vercel Blob Client Upload (Direct from Browser to Vercel Blob, up to 500MB, 0 Payload!)
     try {
-      const sessionRes = await fetch('/api/create-upload-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: file.name,
-          mimeType: file.type || (isAudio ? 'audio/mp3' : 'video/mp4'),
-          size: file.size,
-        }),
+      console.log('[Vercel Blob] Uploading directly from browser...');
+      const newBlob = await upload(file.name, file, {
+        access: 'public',
+        handleUploadUrl: '/api/upload-media',
       });
 
-      if (sessionRes.ok) {
-        const sessionData = await sessionRes.json();
-        if (sessionData.success && sessionData.uploadUrl) {
-          // Stream raw binary directly from browser to Google Gemini Cloud
-          const googleUploadRes = await fetch(sessionData.uploadUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Length': String(file.size),
-              'X-Goog-Upload-Offset': '0',
-              'X-Goog-Upload-Command': 'upload, finalize',
-            },
-            body: file,
-          });
-
-          if (googleUploadRes.ok) {
-            const cloudData = await googleUploadRes.json();
-            if (cloudData.file?.uri) {
-              directUploadSucceeded = true;
-              const res = await fetch('/api/upload-media', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  fileUri: cloudData.file.uri,
-                  cloudFileName: cloudData.file.name,
-                  fileName: file.name,
-                  mimeType: file.type || (isAudio ? 'audio/mp3' : 'video/mp4'),
-                  title: file.name.replace(/\.[^/.]+$/, ''),
-                  onlyVietnamese,
-                }),
-              });
-
-              const data = await res.json();
-              if (!res.ok || !data.success) {
-                const errObj: any = new Error(data.error || 'Bóc tách tệp thất bại.');
-                errObj.code = data.errorCode;
-                throw errObj;
-              }
-
-              data.data.onlyVietnamese = onlyVietnamese;
-              data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
-              data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
-              try {
-                data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
-              } catch {}
-
-              setCurrentResult(data.data);
-              saveToHistory(data.data);
-              confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
-              setIsLoading(false);
-              return;
-            }
-          }
-        }
-      }
-    } catch (directErr) {
-      console.warn('[Direct Upload] Cloud stream error, falling back to local optimization:', directErr);
-    }
-
-    // Strategy 2: Fallback with browser audio compression if direct upload failed
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result as string;
-        const res = await fetch('/api/upload-media', {
+      if (newBlob?.url) {
+        console.log('[Vercel Blob] Uploaded successfully, sending blob URL to /api/process-blob...');
+        const response = await fetch('/api/process-blob', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            base64Data,
+            blobUrl: newBlob.url,
             fileName: file.name,
             mimeType: file.type || (isAudio ? 'audio/mp3' : 'video/mp4'),
             title: file.name.replace(/\.[^/.]+$/, ''),
@@ -382,63 +318,111 @@ export default function App() {
           }),
         });
 
-        if (res.status === 413) {
-          throw {
-            code: 'PAYLOAD_TOO_LARGE',
-            message: 'Tệp quá lớn (> 20 MB). Vui lòng thử video ngắn hơn hoặc chọn file MP3.',
-          };
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || 'Lỗi bóc tách tệp.');
         }
 
-        let data: any;
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          data = await res.json();
-        } else {
-          throw {
-            code: 'PAYLOAD_TOO_LARGE',
-            message: 'Tệp quá lớn (> 20 MB). Vui lòng thử video ngắn hơn hoặc chọn file MP3.',
-          };
-        }
-
-        if (!res.ok || !data.success) {
-          const errObj: any = new Error(data.error || 'Lỗi bóc tách tệp.');
-          errObj.code = data.errorCode;
-          throw errObj;
-        }
-
-        data.data.onlyVietnamese = onlyVietnamese;
-        data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
-        data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+        result.data.onlyVietnamese = onlyVietnamese;
+        result.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
+        result.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
         try {
-          data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+          result.data.videoMetadata.streamUrl = URL.createObjectURL(file);
         } catch {}
 
-        setCurrentResult(data.data);
-        saveToHistory(data.data);
+        setCurrentResult(result.data);
+        saveToHistory(result.data);
         confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
-      } catch (err: any) {
-        console.error('Upload extract error:', err);
-        let code = err.code || 'UNKNOWN';
-        let message = err.message || 'Lỗi xử lý tệp tải lên.';
-        if (typeof message === 'string' && (message.includes('413') || message.includes('PAYLOAD_TOO_LARGE'))) {
-          code = 'PAYLOAD_TOO_LARGE';
-          message = 'Tệp quá lớn (> 20 MB). Vui lòng thử video ngắn hơn hoặc chọn file MP3.';
-        } else if (message.includes('Failed to fetch')) {
-          code = 'NETWORK_ERROR';
-          message = 'Mất kết nối mạng. Vui lòng thử lại sau.';
-        }
-        setErrorState({ code, message });
-      } finally {
         setIsLoading(false);
+        return;
       }
-    };
+    } catch (blobErr: any) {
+      console.warn('[Vercel Blob] Blob client upload skipped/failed, using high-speed audio optimization fallback:', blobErr.message || blobErr);
+    }
 
-    reader.onerror = () => {
-      setErrorState({ code: 'FILE_READ_ERROR', message: 'Không thể đọc tệp từ thiết bị của bạn.' });
+    // Strategy 2: High-Speed Browser Audio Extraction Fallback (WAV/Audio 16kHz Mono: only ~120KB-2MB, 100% Vercel Safe!)
+    try {
+      console.log('[Audio Optimization] Extracting lightweight audio in browser...');
+      const audioFile = await extractAudioFromVideoInBrowser(file);
+      const reader = new FileReader();
+
+      reader.onload = async () => {
+        try {
+          const base64Data = reader.result as string;
+          const res = await fetch('/api/upload-media', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              base64Data,
+              fileName: file.name,
+              mimeType: audioFile.type || 'audio/wav',
+              title: file.name.replace(/\.[^/.]+$/, ''),
+              onlyVietnamese,
+            }),
+          });
+
+          if (res.status === 413) {
+            throw {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: 'Tệp quá lớn. Vui lòng chọn tệp ngắn hơn hoặc file MP3.',
+            };
+          }
+
+          let data: any;
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            data = await res.json();
+          } else {
+            throw {
+              code: 'PAYLOAD_TOO_LARGE',
+              message: 'Tệp quá lớn. Vui lòng chọn tệp ngắn hơn hoặc file MP3.',
+            };
+          }
+
+          if (!res.ok || !data.success) {
+            const errObj: any = new Error(data.error || 'Lỗi bóc tách tệp.');
+            errObj.code = data.errorCode;
+            throw errObj;
+          }
+
+          data.data.onlyVietnamese = onlyVietnamese;
+          data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
+          data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+          try {
+            data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+          } catch {}
+
+          setCurrentResult(data.data);
+          saveToHistory(data.data);
+          confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
+        } catch (err: any) {
+          console.error('Upload extract error:', err);
+          let code = err.code || 'UNKNOWN';
+          let message = err.message || 'Lỗi xử lý tệp tải lên.';
+          if (typeof message === 'string' && (message.includes('413') || message.includes('PAYLOAD_TOO_LARGE'))) {
+            code = 'PAYLOAD_TOO_LARGE';
+            message = 'Tệp quá lớn. Vui lòng chọn tệp ngắn hơn hoặc file MP3.';
+          } else if (message.includes('Failed to fetch')) {
+            code = 'NETWORK_ERROR';
+            message = 'Mất kết nối mạng. Vui lòng thử lại sau.';
+          }
+          setErrorState({ code, message });
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      reader.onerror = () => {
+        setErrorState({ code: 'FILE_READ_ERROR', message: 'Không thể đọc tệp từ thiết bị của bạn.' });
+        setIsLoading(false);
+      };
+
+      reader.readAsDataURL(audioFile);
+    } catch (compressErr: any) {
+      console.error('Audio compression error:', compressErr);
+      setErrorState({ code: 'COMPRESS_ERROR', message: 'Không thể xử lý âm thanh tệp này. Vui lòng thử tệp khác.' });
       setIsLoading(false);
-    };
-
-    reader.readAsDataURL(file);
+    }
   };
 
   return (
