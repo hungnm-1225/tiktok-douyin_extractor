@@ -143,13 +143,13 @@ function getAiClient(customApiKey?: string): GoogleGenAI {
 }
 
 const CANDIDATE_MODELS = [
+  'gemini-flash-lite-latest',
   'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
   'gemini-3.8-flash',
   'gemini-3.6-flash',
   'gemini-3-flash',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
 ];
 
 const SYSTEM_INSTRUCTION = `Bạn là chuyên gia bóc tách kịch bản audio/video ngắn hàng đầu (TikTok & Douyin).
@@ -317,7 +317,7 @@ export async function processMediaWithGemini({
     for (const modelName of CANDIDATE_MODELS) {
       console.log(`[Gemini Pipeline] Attempting with model: ${modelName}...`);
       try {
-        response = await ai.models.generateContent({
+        const modelPromise = ai.models.generateContent({
           model: modelName,
           contents: [
             mediaPart,
@@ -332,6 +332,12 @@ export async function processMediaWithGemini({
           },
         });
 
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout waiting for model ${modelName} (20s exceeded)`)), 20000)
+        );
+
+        response = await Promise.race([modelPromise, timeoutPromise]);
+
         if (response?.text) {
           console.log(`[Gemini Pipeline] Success with model: ${modelName}!`);
           successfulModel = modelName;
@@ -339,7 +345,7 @@ export async function processMediaWithGemini({
         }
       } catch (err: any) {
         lastError = err;
-        console.warn(`[Gemini Pipeline] Model ${modelName} error:`, err.message || err);
+        console.warn(`[Gemini Pipeline] Model ${modelName} notice:`, err.message || err);
         continue;
       }
     }

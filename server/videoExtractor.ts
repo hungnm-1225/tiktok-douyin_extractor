@@ -53,8 +53,115 @@ export function extractCleanUrl(text: string): string {
 }
 
 /**
+ * Resolves TikTok URLs cleanly without triggering bot challenges or hanging.
+ */
+export async function resolveTikTokUrl(cleanUrl: string): Promise<{ finalUrl: string; awemeId?: string }> {
+  // 1. Direct ID extraction if it is already a full TikTok video or photo URL
+  const directIdMatch =
+    cleanUrl.match(/\/video\/(\d{15,25})/i) ||
+    cleanUrl.match(/\/photo\/(\d{15,25})/i) ||
+    cleanUrl.match(/\/v\/(\d{15,25})/i);
+
+  if (directIdMatch) {
+    return { finalUrl: cleanUrl, awemeId: directIdMatch[1] };
+  }
+
+  // 2. Handle TikTok short links (vt.tiktok.com, vm.tiktok.com, /t/XXXX)
+  const isShortLink =
+    cleanUrl.includes('vt.tiktok.com') ||
+    cleanUrl.includes('vm.tiktok.com') ||
+    /\/t\/[a-zA-Z0-9_-]+/i.test(cleanUrl);
+
+  if (isShortLink) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // Strict 4s timeout
+
+      // Use redirect: 'manual' to get the Location header immediately without downloading page body
+      const res = await fetch(cleanUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const redirectLocation = res.headers.get('location');
+      if (redirectLocation) {
+        let resolved = redirectLocation;
+        if (resolved.startsWith('/')) {
+          resolved = 'https://www.tiktok.com' + resolved;
+        }
+        const idMatch =
+          resolved.match(/\/video\/(\d{15,25})/i) ||
+          resolved.match(/\/photo\/(\d{15,25})/i);
+        return { finalUrl: resolved, awemeId: idMatch ? idMatch[1] : undefined };
+      }
+    } catch (err: any) {
+      console.warn('[TikTok URL Resolver] Quick redirect resolution notice:', err.message);
+    }
+  }
+
+  // Fallback: return cleanUrl as-is (TikWM handles raw URLs and short links directly)
+  const fallbackId = cleanUrl.match(/(\d{18,22})/);
+  return { finalUrl: cleanUrl, awemeId: fallbackId ? fallbackId[1] : undefined };
+}
+
+/**
+ * Resolves Douyin URLs (handling v.douyin.com redirects, modal_id, etc.)
+ */
+export async function resolveDouyinUrl(cleanUrl: string): Promise<{ finalUrl: string; awemeId?: string }> {
+  const directModal = cleanUrl.match(/modal_id=(\d{18,22})/i) || cleanUrl.match(/\/video\/(\d{18,22})/i);
+  if (directModal && directModal[1]) {
+    return { finalUrl: cleanUrl, awemeId: directModal[1] };
+  }
+
+  const isShortLink = cleanUrl.includes('v.douyin.com');
+  let finalUrl = cleanUrl;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+
+    const res = await fetch(cleanUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.url) {
+      finalUrl = res.url;
+    }
+  } catch (err: any) {
+    console.warn('[Douyin URL Resolver] Network notice:', err.message);
+  }
+
+  const isDouyinRoot = /^https?:\/\/(www\.)?douyin\.com\/?(\?.*)?$/i.test(finalUrl);
+  if (isShortLink && isDouyinRoot) {
+    throw new VideoExtractionError(
+      'VIDEO_UNAVAILABLE',
+      'Video Douyin không khả dụng (Video này có thể đã bị xóa, cài đặt chế độ riêng tư hoặc đường link chia sẻ đã hết hạn).'
+    );
+  }
+
+  const awemeMatch =
+    finalUrl.match(/video\/(\d+)/i) ||
+    finalUrl.match(/modal_id=(\d+)/i) ||
+    finalUrl.match(/item_ids=(\d+)/i);
+  const awemeId = awemeMatch ? awemeMatch[1] : undefined;
+
+  return { finalUrl, awemeId };
+}
+
+/**
  * Resolves short links (e.g. v.douyin.com, vt.tiktok.com) and validates whether the video is still active.
- * If Douyin/TikTok redirects to homepage (root), the video is deleted, private, or expired!
  */
 export async function resolveAndValidateUrl(rawUrl: string): Promise<{
   finalUrl: string;
@@ -64,50 +171,17 @@ export async function resolveAndValidateUrl(rawUrl: string): Promise<{
   const cleanUrl = extractCleanUrl(rawUrl);
   const platform = identifyPlatform(cleanUrl);
 
-  const isShortLink =
-    cleanUrl.includes('v.douyin.com') ||
-    cleanUrl.includes('vt.tiktok.com') ||
-    cleanUrl.includes('vm.tiktok.com');
-
-  let finalUrl = cleanUrl;
-
-  try {
-    const res = await fetch(cleanUrl, {
-      redirect: 'follow',
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-      },
-    });
-
-    if (res.url) {
-      finalUrl = res.url;
-    }
-  } catch (err: any) {
-    console.warn('[URL Resolver] Network warning while following redirect:', err.message);
+  if (platform === 'tiktok') {
+    const { finalUrl, awemeId } = await resolveTikTokUrl(cleanUrl);
+    return { finalUrl, platform, awemeId };
   }
 
-  // Check if destination is redirected back to root homepage
-  // Douyin: https://www.douyin.com/ or https://www.douyin.com/discover (indicates deleted/private video)
-  // TikTok: https://www.tiktok.com/ or https://www.tiktok.com/explore
-  const isDouyinRoot = /^https?:\/\/(www\.)?douyin\.com\/?(\?.*)?$/i.test(finalUrl);
-  const isTikTokRoot = /^https?:\/\/(www\.)?tiktok\.com\/?(\?.*)?$/i.test(finalUrl);
-
-  if ((isShortLink && (isDouyinRoot || isTikTokRoot)) || (!isShortLink && (isDouyinRoot || isTikTokRoot))) {
-    throw new VideoExtractionError(
-      'VIDEO_UNAVAILABLE',
-      'Video không khả dụng (Video này có thể đã bị tác giả xóa, cài đặt chế độ riêng tư hoặc đường link chia sẻ đã hết hạn).'
-    );
+  if (platform === 'douyin') {
+    const { finalUrl, awemeId } = await resolveDouyinUrl(cleanUrl);
+    return { finalUrl, platform, awemeId };
   }
 
-  // Extract Aweme ID if present
-  const awemeMatch =
-    finalUrl.match(/video\/(\d+)/i) ||
-    finalUrl.match(/modal_id=(\d+)/i) ||
-    finalUrl.match(/item_ids=(\d+)/i);
-  const awemeId = awemeMatch ? awemeMatch[1] : undefined;
-
-  return { finalUrl, platform, awemeId };
+  return { finalUrl: cleanUrl, platform, awemeId: undefined };
 }
 
 /**
@@ -417,13 +491,18 @@ async function downloadViaTikWmApi(
       const targetFilePath = path.join(TEMP_DIR, `${fileId}.${extension}`);
 
       console.log(`[TikWM API] Downloading full video/media stream (${extension})...`);
+      const streamController = new AbortController();
+      const streamTimeoutId = setTimeout(() => streamController.abort(), 15000);
+
       const streamRes = await fetch(mediaStreamUrl, {
         headers: {
           'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
           'Referer': platform === 'douyin' ? 'https://www.douyin.com/' : 'https://www.tiktok.com/',
         },
+        signal: streamController.signal,
       });
+      clearTimeout(streamTimeoutId);
 
       if (!streamRes.ok) {
         console.warn(`[TikWM API] Failed to download stream: ${streamRes.status}`);

@@ -9,13 +9,13 @@ export const config = {
 };
 
 const CANDIDATE_MODELS = [
+  'gemini-flash-lite-latest',
   'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
   'gemini-3.8-flash',
   'gemini-3.6-flash',
   'gemini-3-flash',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
 ];
 
 export function safeParseGeminiJson(rawText: string): any {
@@ -256,48 +256,101 @@ function identifyPlatform(url: string): 'tiktok' | 'douyin' | 'sample' {
 }
 
 /**
- * Resolves short links (e.g. v.douyin.com, vt.tiktok.com) and validates whether the video is still active.
- * If Douyin/TikTok redirects to homepage (root), the video is deleted, private, or expired!
+ * Resolves TikTok URLs cleanly without triggering bot challenges or hanging.
  */
-async function resolveAndValidateUrl(rawUrl: string): Promise<{
-  finalUrl: string;
-  platform: 'tiktok' | 'douyin' | 'sample';
-  awemeId?: string;
-}> {
-  const cleanUrl = extractCleanUrl(rawUrl);
-  const platform = identifyPlatform(cleanUrl);
+async function resolveTikTokUrl(cleanUrl: string): Promise<{ finalUrl: string; awemeId?: string }> {
+  // 1. Direct ID extraction if it is already a full TikTok video or photo URL
+  const directIdMatch =
+    cleanUrl.match(/\/video\/(\d{15,25})/i) ||
+    cleanUrl.match(/\/photo\/(\d{15,25})/i) ||
+    cleanUrl.match(/\/v\/(\d{15,25})/i);
 
+  if (directIdMatch) {
+    return { finalUrl: cleanUrl, awemeId: directIdMatch[1] };
+  }
+
+  // 2. Handle TikTok short links (vt.tiktok.com, vm.tiktok.com, /t/XXXX)
   const isShortLink =
-    cleanUrl.includes('v.douyin.com') ||
     cleanUrl.includes('vt.tiktok.com') ||
-    cleanUrl.includes('vm.tiktok.com');
+    cleanUrl.includes('vm.tiktok.com') ||
+    /\/t\/[a-zA-Z0-9_-]+/i.test(cleanUrl);
 
+  if (isShortLink) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // Strict 4s timeout
+
+      // Use redirect: 'manual' to get the Location header immediately without downloading page body
+      const res = await fetch(cleanUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const redirectLocation = res.headers.get('location');
+      if (redirectLocation) {
+        let resolved = redirectLocation;
+        if (resolved.startsWith('/')) {
+          resolved = 'https://www.tiktok.com' + resolved;
+        }
+        const idMatch =
+          resolved.match(/\/video\/(\d{15,25})/i) ||
+          resolved.match(/\/photo\/(\d{15,25})/i);
+        return { finalUrl: resolved, awemeId: idMatch ? idMatch[1] : undefined };
+      }
+    } catch (err: any) {
+      console.warn('[TikTok URL Resolver] Quick redirect resolution notice:', err.message);
+    }
+  }
+
+  // Fallback: return cleanUrl as-is (TikWM handles raw URLs and short links directly)
+  const fallbackId = cleanUrl.match(/(\d{18,22})/);
+  return { finalUrl: cleanUrl, awemeId: fallbackId ? fallbackId[1] : undefined };
+}
+
+/**
+ * Resolves Douyin URLs (handling v.douyin.com redirects, modal_id, etc.)
+ */
+async function resolveDouyinUrl(cleanUrl: string): Promise<{ finalUrl: string; awemeId?: string }> {
+  const directModal = cleanUrl.match(/modal_id=(\d{18,22})/i) || cleanUrl.match(/\/video\/(\d{18,22})/i);
+  if (directModal && directModal[1]) {
+    return { finalUrl: cleanUrl, awemeId: directModal[1] };
+  }
+
+  const isShortLink = cleanUrl.includes('v.douyin.com');
   let finalUrl = cleanUrl;
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+
     const res = await fetch(cleanUrl, {
       redirect: 'follow',
       headers: {
         'User-Agent':
           'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (res.url) {
       finalUrl = res.url;
     }
   } catch (err: any) {
-    console.warn('[URL Resolver Serverless] Network warning:', err.message);
+    console.warn('[Douyin URL Resolver] Network notice:', err.message);
   }
 
-  // Check if destination is redirected back to root homepage
   const isDouyinRoot = /^https?:\/\/(www\.)?douyin\.com\/?(\?.*)?$/i.test(finalUrl);
-  const isTikTokRoot = /^https?:\/\/(www\.)?tiktok\.com\/?(\?.*)?$/i.test(finalUrl);
-
-  if ((isShortLink && (isDouyinRoot || isTikTokRoot)) || (!isShortLink && (isDouyinRoot || isTikTokRoot))) {
+  if (isShortLink && isDouyinRoot) {
     throw new VideoExtractionError(
       'VIDEO_UNAVAILABLE',
-      'Video không khả dụng (Video này có thể đã bị tác giả xóa, cài đặt chế độ riêng tư hoặc đường link chia sẻ đã hết hạn).'
+      'Video Douyin không khả dụng (Video này có thể đã bị tác giả xóa, cài đặt chế độ riêng tư hoặc đường link chia sẻ đã hết hạn).'
     );
   }
 
@@ -307,7 +360,31 @@ async function resolveAndValidateUrl(rawUrl: string): Promise<{
     finalUrl.match(/item_ids=(\d+)/i);
   const awemeId = awemeMatch ? awemeMatch[1] : undefined;
 
-  return { finalUrl, platform, awemeId };
+  return { finalUrl, awemeId };
+}
+
+/**
+ * Resolves URLs and validates whether the video is still active.
+ */
+async function resolveAndValidateUrl(rawUrl: string): Promise<{
+  finalUrl: string;
+  platform: 'tiktok' | 'douyin' | 'sample';
+  awemeId?: string;
+}> {
+  const cleanUrl = extractCleanUrl(rawUrl);
+  const platform = identifyPlatform(cleanUrl);
+
+  if (platform === 'tiktok') {
+    const { finalUrl, awemeId } = await resolveTikTokUrl(cleanUrl);
+    return { finalUrl, platform, awemeId };
+  }
+
+  if (platform === 'douyin') {
+    const { finalUrl, awemeId } = await resolveDouyinUrl(cleanUrl);
+    return { finalUrl, platform, awemeId };
+  }
+
+  return { finalUrl: cleanUrl, platform, awemeId: undefined };
 }
 
 async function downloadViaDouyinRenderData(
@@ -459,15 +536,124 @@ async function downloadViaDouyinRenderData(
   return null;
 }
 
-async function downloadViaTikWm(
+/**
+ * Strategy for TikTok: Dedicated High-Speed TikWM Extraction Engine
+ */
+async function downloadTikTokMedia(
   cleanUrl: string,
   fileId: string,
-  platform: 'tiktok' | 'douyin' | 'sample',
+  tempDir: string,
+  awemeId?: string
+) {
+  const endpoints = ['https://www.tikwm.com/api/', 'https://tikwm.com/api/'];
+  const urlsToTry = [cleanUrl];
+  if (awemeId) {
+    const canonical = `https://www.tiktok.com/@/video/${awemeId}`;
+    if (!urlsToTry.includes(canonical)) urlsToTry.push(canonical);
+  }
+
+  for (const endpoint of endpoints) {
+    for (const urlTarget of urlsToTry) {
+      try {
+        const form = new URLSearchParams();
+        form.append('url', urlTarget);
+        form.append('hd', '1');
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+
+        const apiRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          },
+          body: form.toString(),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (apiRes.ok) {
+          const data = await apiRes.json();
+          if (data.code === 0 && data.data) {
+            const videoData = data.data;
+            const title = videoData.title || 'TikTok Video';
+            const author = videoData.author?.nickname || videoData.author?.unique_id || 'TikTok Creator';
+            const duration = videoData.duration || 30;
+
+            const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.hdplay || videoData.music;
+            const directPlayUrl = videoData.play || videoData.wmplay || videoData.hdplay;
+            let coverUrl = videoData.cover || videoData.origin_cover;
+            if (coverUrl && coverUrl.startsWith('//')) {
+              coverUrl = 'https:' + coverUrl;
+            }
+
+            let fullPlayUrl = directPlayUrl || mediaStreamUrl;
+            if (fullPlayUrl && fullPlayUrl.startsWith('//')) {
+              fullPlayUrl = 'https:' + fullPlayUrl;
+            }
+
+            if (mediaStreamUrl) {
+              const isVideo = Boolean(videoData.play || videoData.wmplay || videoData.hdplay || (!videoData.music && mediaStreamUrl));
+              const ext = isVideo ? 'mp4' : 'mp3';
+              const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
+              const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
+
+              const streamController = new AbortController();
+              const streamTimeoutId = setTimeout(() => streamController.abort(), 15000); // 15s timeout
+
+              const streamRes = await fetch(mediaStreamUrl, {
+                headers: {
+                  'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  Referer: 'https://www.tiktok.com/',
+                },
+                signal: streamController.signal,
+              });
+              clearTimeout(streamTimeoutId);
+
+              if (streamRes.ok) {
+                const buffer = Buffer.from(await streamRes.arrayBuffer());
+                if (buffer.length > 1000) {
+                  fs.writeFileSync(targetFilePath, buffer);
+                  const proxyStreamUrl = fullPlayUrl ? `/api/proxy-media?url=${encodeURIComponent(fullPlayUrl)}&platform=tiktok` : undefined;
+                  return {
+                    filePath: targetFilePath,
+                    mimeType,
+                    title,
+                    author,
+                    duration,
+                    platform: 'tiktok' as const,
+                    streamUrl: proxyStreamUrl || fullPlayUrl,
+                    downloadUrl: proxyStreamUrl || fullPlayUrl,
+                    coverImage: coverUrl,
+                  };
+                }
+              }
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[TikTok Extractor] Attempt notice on ${endpoint} for ${urlTarget}:`, err.message);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Strategy for Douyin: TikWM Douyin Fallback
+ */
+async function downloadDouyinViaTikWm(
+  cleanUrl: string,
+  fileId: string,
   tempDir: string,
   awemeId?: string
 ) {
   const urlsToTry = [cleanUrl];
-  if (platform === 'douyin' && awemeId) {
+  if (awemeId) {
     const canonical = `https://www.douyin.com/video/${awemeId}`;
     if (!urlsToTry.includes(canonical)) urlsToTry.push(canonical);
   }
@@ -479,7 +665,7 @@ async function downloadViaTikWm(
       form.append('hd', '1');
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       const apiRes = await fetch('https://www.tikwm.com/api/', {
         method: 'POST',
@@ -497,7 +683,7 @@ async function downloadViaTikWm(
         const data = await apiRes.json();
         if (data.code === 0 && data.data) {
           const videoData = data.data;
-          const title = videoData.title || (platform === 'douyin' ? 'Douyin Video' : 'TikTok Video');
+          const title = videoData.title || 'Douyin Video';
           const author = videoData.author?.nickname || videoData.author?.unique_id || 'Creator';
           const duration = videoData.duration || 30;
 
@@ -523,7 +709,7 @@ async function downloadViaTikWm(
               headers: {
                 'User-Agent':
                   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                Referer: platform === 'douyin' ? 'https://www.douyin.com/' : 'https://www.tiktok.com/',
+                Referer: 'https://www.douyin.com/',
               },
             });
 
@@ -531,14 +717,14 @@ async function downloadViaTikWm(
               const buffer = Buffer.from(await streamRes.arrayBuffer());
               if (buffer.length > 1000) {
                 fs.writeFileSync(targetFilePath, buffer);
-                const proxyStreamUrl = fullPlayUrl ? `/api/proxy-media?url=${encodeURIComponent(fullPlayUrl)}` : undefined;
+                const proxyStreamUrl = fullPlayUrl ? `/api/proxy-media?url=${encodeURIComponent(fullPlayUrl)}&platform=douyin` : undefined;
                 return {
                   filePath: targetFilePath,
                   mimeType,
                   title,
                   author,
                   duration,
-                  platform,
+                  platform: 'douyin' as const,
                   streamUrl: proxyStreamUrl || fullPlayUrl,
                   downloadUrl: proxyStreamUrl || fullPlayUrl,
                   coverImage: coverUrl,
@@ -548,12 +734,111 @@ async function downloadViaTikWm(
           }
         }
       }
-    } catch (err) {
-      console.warn(`[Download] TikWM attempt error on ${urlTarget}:`, err);
+    } catch (err: any) {
+      console.warn(`[Download] TikWM attempt error on ${urlTarget}:`, err.message);
     }
   }
 
   return null;
+}
+
+/**
+ * Strategy for Douyin: All Douyin cascade engines
+ */
+async function downloadDouyinMedia(
+  finalUrl: string,
+  fileId: string,
+  tempDir: string,
+  awemeId?: string
+) {
+  // Strategy 1: ByteDance Acrawler & RENDER_DATA Direct Video Extractor
+  const douyinRender = await downloadViaDouyinRenderData(finalUrl, fileId, tempDir, awemeId);
+  if (douyinRender) return douyinRender;
+
+  // Strategy 2: TikWM Douyin
+  const tikWmRes = await downloadDouyinViaTikWm(finalUrl, fileId, tempDir, awemeId);
+  if (tikWmRes) return tikWmRes;
+
+  // Strategy 3: Douyin Direct API
+  try {
+    const canonical = awemeId ? `https://www.douyin.com/video/${awemeId}` : finalUrl;
+    const redirectRes = await fetch(canonical, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
+      },
+      redirect: 'follow',
+    });
+    const resolvedUrl = redirectRes.url;
+    const awemeIdMatch = resolvedUrl.match(/video\/(\d+)/) || resolvedUrl.match(/modal_id=(\d+)/);
+    if (awemeIdMatch && awemeIdMatch[1]) {
+      const itemId = awemeIdMatch[1];
+      const infoRes = await fetch(`https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=${itemId}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)' },
+      });
+      if (infoRes.ok) {
+        const infoData = await infoRes.json();
+        const item = infoData.item_list?.[0];
+        if (item) {
+          const title = item.desc || 'Douyin Video';
+          const author = item.author?.nickname || 'Douyin Creator';
+          const duration = Math.round((item.duration || 30000) / 1000);
+          const videoUrl = item.video?.play_addr?.url_list?.[0]?.replace('playwm', 'play');
+          const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
+          const targetUrl = videoUrl || audioUrl;
+          let videoCoverUrl = item.video?.cover?.url_list?.[0];
+          if (videoCoverUrl && videoCoverUrl.startsWith('//')) {
+            videoCoverUrl = 'https:' + videoCoverUrl;
+          }
+          let fullTargetUrl = targetUrl;
+          if (fullTargetUrl && fullTargetUrl.startsWith('//')) {
+            fullTargetUrl = 'https:' + fullTargetUrl;
+          }
+
+          if (targetUrl) {
+            const isVideo = Boolean(videoUrl);
+            const ext = isVideo ? 'mp4' : 'mp3';
+            const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
+            const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
+
+            const mediaRes = await fetch(targetUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)',
+                Referer: 'https://www.douyin.com/',
+              },
+            });
+
+            if (mediaRes.ok) {
+              const buffer = Buffer.from(await mediaRes.arrayBuffer());
+              if (buffer.length > 1000) {
+                fs.writeFileSync(targetFilePath, buffer);
+                const proxyStreamUrl = `/api/proxy-media?url=${encodeURIComponent(fullTargetUrl)}&platform=douyin`;
+                return {
+                  filePath: targetFilePath,
+                  mimeType,
+                  title,
+                  author,
+                  duration,
+                  platform: 'douyin' as const,
+                  streamUrl: proxyStreamUrl,
+                  downloadUrl: proxyStreamUrl,
+                  coverImage: videoCoverUrl,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Download] Douyin Direct attempt error:', err);
+  }
+
+  throw new VideoExtractionError(
+    'WAF_CHALLENGE_BLOCKED',
+    'Không thể trích xuất video Douyin (Tường lửa chống bot hoặc cơ chế bảo mật của Douyin hạn chế máy chủ). ' +
+    'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng tab "Tải file MP4/MP3" trên giao diện để AI bóc tách ngay!'
+  );
 }
 
 async function downloadMedia(rawUrl: string, fileId: string) {
@@ -564,99 +849,14 @@ async function downloadMedia(rawUrl: string, fileId: string) {
 
   const { finalUrl, platform, awemeId } = await resolveAndValidateUrl(rawUrl);
 
-  // Strategy for Douyin: Try ByteDance Acrawler & RENDER_DATA Direct Video Extractor first
+  // Strategy for Douyin: Completely separate Douyin cascade engines
   if (platform === 'douyin') {
-    const douyinRender = await downloadViaDouyinRenderData(finalUrl, fileId, tempDir, awemeId);
-    if (douyinRender) return douyinRender;
-
-    const tikWmRes = await downloadViaTikWm(finalUrl, fileId, platform, tempDir, awemeId);
-    if (tikWmRes) return tikWmRes;
-
-    // Strategy 3: Douyin Direct API
-    try {
-      const canonical = awemeId ? `https://www.douyin.com/video/${awemeId}` : finalUrl;
-      const redirectRes = await fetch(canonical, {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
-        },
-        redirect: 'follow',
-      });
-      const resolvedUrl = redirectRes.url;
-      const awemeIdMatch = resolvedUrl.match(/video\/(\d+)/) || resolvedUrl.match(/modal_id=(\d+)/);
-      if (awemeIdMatch && awemeIdMatch[1]) {
-        const itemId = awemeIdMatch[1];
-        const infoRes = await fetch(`https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=${itemId}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)' },
-        });
-        if (infoRes.ok) {
-          const infoData = await infoRes.json();
-          const item = infoData.item_list?.[0];
-          if (item) {
-            const title = item.desc || 'Douyin Video';
-            const author = item.author?.nickname || 'Douyin Creator';
-            const duration = Math.round((item.duration || 30000) / 1000);
-            const videoUrl = item.video?.play_addr?.url_list?.[0]?.replace('playwm', 'play');
-            const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
-            const targetUrl = videoUrl || audioUrl;
-            let videoCoverUrl = item.video?.cover?.url_list?.[0];
-            if (videoCoverUrl && videoCoverUrl.startsWith('//')) {
-              videoCoverUrl = 'https:' + videoCoverUrl;
-            }
-            let fullTargetUrl = targetUrl;
-            if (fullTargetUrl && fullTargetUrl.startsWith('//')) {
-              fullTargetUrl = 'https:' + fullTargetUrl;
-            }
-
-            if (targetUrl) {
-              const isVideo = Boolean(videoUrl);
-              const ext = isVideo ? 'mp4' : 'mp3';
-              const mimeType = isVideo ? 'video/mp4' : 'audio/mp3';
-              const targetFilePath = path.join(tempDir, `${fileId}.${ext}`);
-
-              const mediaRes = await fetch(targetUrl, {
-                headers: {
-                  'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)',
-                  Referer: 'https://www.douyin.com/',
-                },
-              });
-
-              if (mediaRes.ok) {
-                const buffer = Buffer.from(await mediaRes.arrayBuffer());
-                if (buffer.length > 1000) {
-                  fs.writeFileSync(targetFilePath, buffer);
-                  const proxyStreamUrl = `/api/proxy-media?url=${encodeURIComponent(fullTargetUrl)}`;
-                  return {
-                    filePath: targetFilePath,
-                    mimeType,
-                    title,
-                    author,
-                    duration,
-                    platform,
-                    streamUrl: proxyStreamUrl,
-                    downloadUrl: proxyStreamUrl,
-                    coverImage: videoCoverUrl,
-                  };
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[Download] Douyin Direct attempt error:', err);
-    }
-
-    throw new VideoExtractionError(
-      'WAF_CHALLENGE_BLOCKED',
-      'Không thể trích xuất video Douyin (Tường lửa chống bot hoặc cơ chế bảo mật của Douyin hạn chế máy chủ). ' +
-      'Bạn hãy thử mở video trên điện thoại, bấm Lưu Video (Save Video) rồi dùng tab "Tải file MP4/MP3" trên giao diện để AI bóc tách ngay!'
-    );
+    return await downloadDouyinMedia(finalUrl, fileId, tempDir, awemeId);
   }
 
-  // Strategy for TikTok: TikWM API
-  const tikWmRes = await downloadViaTikWm(finalUrl, fileId, platform, tempDir, awemeId);
-  if (tikWmRes) return tikWmRes;
+  // Strategy for TikTok: Dedicated TikTok engine
+  const tiktokRes = await downloadTikTokMedia(finalUrl, fileId, tempDir, awemeId);
+  if (tiktokRes) return tiktokRes;
 
   throw new VideoExtractionError(
     'WAF_CHALLENGE_BLOCKED',
@@ -804,7 +1004,7 @@ export default async function handler(req: any, res: any) {
     for (const modelName of CANDIDATE_MODELS) {
       try {
         console.log(`[API /api/extract] Generating content with model: ${modelName}...`);
-        const response = await ai.models.generateContent({
+        const modelPromise = ai.models.generateContent({
           model: modelName,
           contents: [
             mediaPart,
@@ -820,14 +1020,20 @@ export default async function handler(req: any, res: any) {
           },
         });
 
-        if (response.text) {
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout waiting for model ${modelName} (20s exceeded)`)), 20000)
+        );
+
+        const response: any = await Promise.race([modelPromise, timeoutPromise]);
+
+        if (response && response.text) {
           geminiResponse = response;
           activeModel = modelName;
           break;
         }
       } catch (err: any) {
         lastError = err;
-        console.warn(`[API /api/extract] Model ${modelName} failed:`, err.message);
+        console.warn(`[API /api/extract] Model ${modelName} notice:`, err.message);
       }
     }
 
