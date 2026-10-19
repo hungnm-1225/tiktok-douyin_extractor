@@ -215,6 +215,11 @@ app.post('/api/extract', async (req, res) => {
         title: downloaded.title,
         author: downloaded.author,
         duration: downloaded.duration,
+        streamUrl: downloaded.streamUrl,
+        downloadUrl: downloaded.downloadUrl || downloaded.streamUrl,
+        coverImage: downloaded.coverImage,
+        mimeType: downloaded.mimeType,
+        mediaType: downloaded.mimeType?.startsWith('audio/') ? 'audio' : 'video',
       },
     });
 

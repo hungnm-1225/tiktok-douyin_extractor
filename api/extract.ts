@@ -414,6 +414,7 @@ async function downloadViaDouyinRenderData(
         const title = item.desc || item.itemTitle || 'Douyin Video';
         const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
         const duration = Math.round((item.video.duration || 30000) / 1000);
+        const videoCoverUrl = item.video?.cover?.url_list?.[0] || item.video?.origin_cover?.url_list?.[0];
         let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
         if (!videoStreamUrl && Array.isArray(item.video.playApiList)) videoStreamUrl = item.video.playApiList[0];
 
@@ -433,6 +434,9 @@ async function downloadViaDouyinRenderData(
                 author,
                 duration,
                 platform: 'douyin' as const,
+                streamUrl: videoStreamUrl,
+                downloadUrl: videoStreamUrl,
+                coverImage: videoCoverUrl,
               };
             }
           }
@@ -489,6 +493,8 @@ async function downloadViaTikWm(
           const duration = videoData.duration || 30;
 
           const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.hdplay || videoData.music;
+          const directPlayUrl = videoData.play || videoData.wmplay || videoData.hdplay;
+          const coverUrl = videoData.cover || videoData.origin_cover;
 
           if (mediaStreamUrl) {
             const isVideo = Boolean(videoData.play || videoData.wmplay || videoData.hdplay || (!videoData.music && mediaStreamUrl));
@@ -508,7 +514,17 @@ async function downloadViaTikWm(
               const buffer = Buffer.from(await streamRes.arrayBuffer());
               if (buffer.length > 1000) {
                 fs.writeFileSync(targetFilePath, buffer);
-                return { filePath: targetFilePath, mimeType, title, author, duration, platform };
+                return {
+                  filePath: targetFilePath,
+                  mimeType,
+                  title,
+                  author,
+                  duration,
+                  platform,
+                  streamUrl: directPlayUrl || mediaStreamUrl,
+                  downloadUrl: directPlayUrl || mediaStreamUrl,
+                  coverImage: coverUrl,
+                };
               }
             }
           }
@@ -564,6 +580,7 @@ async function downloadMedia(rawUrl: string, fileId: string) {
             const duration = Math.round((item.duration || 30000) / 1000);
             const videoUrl = item.video?.play_addr?.url_list?.[0]?.replace('playwm', 'play');
             const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
+            const videoCoverUrl = item.video?.cover?.url_list?.[0];
             const targetUrl = videoUrl || audioUrl;
 
             if (targetUrl) {
@@ -583,7 +600,17 @@ async function downloadMedia(rawUrl: string, fileId: string) {
                 const buffer = Buffer.from(await mediaRes.arrayBuffer());
                 if (buffer.length > 1000) {
                   fs.writeFileSync(targetFilePath, buffer);
-                  return { filePath: targetFilePath, mimeType, title, author, duration, platform };
+                  return {
+                    filePath: targetFilePath,
+                    mimeType,
+                    title,
+                    author,
+                    duration,
+                    platform,
+                    streamUrl: targetUrl,
+                    downloadUrl: targetUrl,
+                    coverImage: videoCoverUrl,
+                  };
                 }
               }
             }
@@ -823,6 +850,11 @@ export default async function handler(req: any, res: any) {
           title: media.title,
           author: media.author,
           duration: media.duration,
+          streamUrl: (media as any).streamUrl,
+          downloadUrl: (media as any).downloadUrl || (media as any).streamUrl,
+          coverImage: (media as any).coverImage,
+          mimeType: media.mimeType,
+          mediaType: media.mimeType?.startsWith('audio/') ? 'audio' : 'video',
         },
         createdAt: Date.now(),
         modelUsed: activeModel,

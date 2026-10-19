@@ -39,6 +39,9 @@ export interface DownloadedMedia {
   duration?: number;
   author?: string;
   platform: 'tiktok' | 'douyin' | 'upload' | 'sample';
+  streamUrl?: string;
+  downloadUrl?: string;
+  coverImage?: string;
 }
 
 /**
@@ -438,6 +441,9 @@ async function downloadViaTikWmApi(
         continue;
       }
 
+      const directPlayUrl = videoData.play || videoData.wmplay || videoData.hdplay;
+      const coverUrl = videoData.cover || videoData.origin_cover;
+
       fs.writeFileSync(targetFilePath, buffer);
       console.log(`[TikWM API] Successfully downloaded ${buffer.length} bytes to ${targetFilePath}`);
       return {
@@ -447,6 +453,9 @@ async function downloadViaTikWmApi(
         author,
         duration,
         platform,
+        streamUrl: directPlayUrl || mediaStreamUrl,
+        downloadUrl: directPlayUrl || mediaStreamUrl,
+        coverImage: coverUrl,
       };
     } catch (err: any) {
       console.warn(`[TikWM API] Error occurred on ${urlTarget}:`, err.message);
@@ -523,6 +532,8 @@ async function downloadViaDouyinApi(cleanUrl: string, fileId: string): Promise<D
       return null;
     }
 
+    const videoCoverUrl = item.video?.cover?.url_list?.[0];
+
     fs.writeFileSync(targetFilePath, buffer);
 
     return {
@@ -532,6 +543,9 @@ async function downloadViaDouyinApi(cleanUrl: string, fileId: string): Promise<D
       author,
       duration,
       platform: 'douyin',
+      streamUrl: targetUrl,
+      downloadUrl: targetUrl,
+      coverImage: videoCoverUrl,
     };
   } catch (err: any) {
     console.warn(`[Douyin Direct API] Error:`, err.message);

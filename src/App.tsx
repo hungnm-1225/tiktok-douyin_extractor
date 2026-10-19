@@ -301,6 +301,9 @@ export default function App() {
 
       data.data.onlyVietnamese = onlyVietnamese;
       data.data.isFreshExtraction = true;
+      if (data.data.videoMetadata?.streamUrl) {
+        activeStreamUrlRef.current = data.data.videoMetadata.streamUrl;
+      }
       setCurrentResult(data.data);
       saveToHistory(data.data);
 

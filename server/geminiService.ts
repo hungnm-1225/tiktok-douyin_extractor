@@ -177,6 +177,9 @@ interface ProcessMediaParams {
     duration?: number;
     mimeType?: string;
     mediaType?: 'video' | 'audio';
+    streamUrl?: string;
+    downloadUrl?: string;
+    coverImage?: string;
   };
 }
 

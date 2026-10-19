@@ -215,7 +215,7 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
           /* DEDICATED CUTE PASTEL AUDIO PLAYER (NO BLACK SCREEN)            */
           /* ============================================================== */
           <div className="p-4 sm:p-5 bg-gradient-to-r from-pink-50/90 via-purple-50/80 to-indigo-50/80 space-y-3.5">
-            <audio ref={mediaRef as any} src={src} preload="metadata" onError={onError} />
+            <audio ref={mediaRef as any} src={src} preload="metadata" referrerPolicy="no-referrer" onError={onError} />
 
             {/* Audio Header Row */}
             <div className="flex items-center justify-between gap-3">
@@ -368,6 +368,7 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
                 poster={coverImage}
                 preload="metadata"
                 playsInline
+                referrerPolicy="no-referrer"
                 onError={onError}
                 className="w-full h-full max-h-[480px] object-contain mx-auto"
               />
