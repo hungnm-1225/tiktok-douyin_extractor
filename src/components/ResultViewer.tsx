@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Copy, 
-  Check, 
-  Download, 
-  FileText, 
-  Search, 
-  Clock, 
-  AlignLeft, 
+import {
+  Copy,
+  Check,
+  Download,
+  FileText,
+  Search,
+  Clock,
+  AlignLeft,
   ArrowLeft,
   FileDown,
   Sparkles,
@@ -22,12 +22,12 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { ExtractionResult, ScriptSegment } from '../types';
-import { 
-  copyToClipboard, 
-  downloadTextFile, 
-  generateSrtContent, 
-  formatScriptAsText, 
-  exportDocxFile 
+import {
+  copyToClipboard,
+  downloadTextFile,
+  generateSrtContent,
+  formatScriptAsText,
+  exportDocxFile
 } from '../utils/exportUtils';
 import { CustomMediaPlayer, CustomMediaPlayerRef } from './CustomMediaPlayer';
 
@@ -103,10 +103,23 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
   const [isExportingDocx, setIsExportingDocx] = useState<boolean>(false);
   const [isDownloadDropdownOpen, setIsDownloadDropdownOpen] = useState<boolean>(false);
   const [isPlayerVisible, setIsPlayerVisible] = useState<boolean>(true);
+  const [mediaLoadError, setMediaLoadError] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<CustomMediaPlayerRef>(null);
 
-  const mediaSrc = result.videoMetadata.streamUrl || result.videoMetadata.downloadUrl;
+  // Chỉ hiển thị khung media player khi:
+  // 1. Đây là lượt vừa bóc tách xong (isFreshExtraction === true)
+  // 2. Có URL stream media hợp lệ
+  // 3. Không có lỗi khi tải media
+  const isFreshExtraction = Boolean(result.isFreshExtraction);
+  const mediaSrc = result.videoMetadata?.streamUrl || result.videoMetadata?.downloadUrl;
+  const canShowMediaPlayer = Boolean(
+    isFreshExtraction &&
+    mediaSrc &&
+    !mediaLoadError &&
+    (mediaSrc.startsWith('blob:') || mediaSrc.startsWith('http://') || mediaSrc.startsWith('https://'))
+  );
+
   const isVietnamese = result.isVietnamese;
 
   // Close dropdown when clicking outside
@@ -278,9 +291,9 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
         </div>
       </div>
 
-      {/* CARD 1.5: Custom Pastel Media Player for Video/Audio Verification */}
-      {mediaSrc && (
-        <div id="media-player-section" className="space-y-2.5">
+      {/* CARD 1.5: Custom Pastel Media Player - CHỈ HIỂN THỊ KHI VỪA BÓC TÁCH XONG (không hiện khi xem lại từ lịch sử để tránh màn hình đen) */}
+      {canShowMediaPlayer && (
+        <div id="media-player-section" className="space-y-2.5 animate-in fade-in duration-300">
           <div className="flex items-center justify-between px-2">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
               <Video className="h-4 w-4 text-pink-500" />
@@ -307,6 +320,10 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
               coverImage={result.videoMetadata.coverImage}
               mimeType={result.videoMetadata.mimeType}
               mediaType={result.videoMetadata.mediaType}
+              onError={() => {
+                console.warn('[Media Player] Media resource failed to load, automatically hiding player.');
+                setMediaLoadError(true);
+              }}
             />
           )}
         </div>
@@ -453,24 +470,6 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                       <div className="text-[11px] text-slate-400">Dành cho CapCut, Premiere, DaVinci</div>
                     </div>
                   </button>
-
-                  {/* Option 4: Direct MP4 Video Download (if available) */}
-                  {result.videoMetadata.downloadUrl && (
-                    <a
-                      href={result.videoMetadata.downloadUrl}
-                      download
-                      onClick={() => setIsDownloadDropdownOpen(false)}
-                      className="w-full flex items-start gap-3 p-2.5 rounded-xl hover:bg-pink-50 text-left transition-colors cursor-pointer group border-t border-pink-50"
-                    >
-                      <div className="p-2 rounded-lg bg-pink-100 text-pink-700 group-hover:bg-pink-200">
-                        <Video className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-pink-700">Tải Video Gốc (MP4)</div>
-                        <div className="text-[11px] text-slate-400">Video chất lượng cao gốc</div>
-                      </div>
-                    </a>
-                  )}
                 </div>
               )}
             </div>
@@ -600,34 +599,14 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                         <span className="text-pink-500 font-bold select-none text-base leading-snug shrink-0">-</span>
                         <div className="flex-1 space-y-1">
                           {isVietnamese ? (
-                            <p className="text-slate-800 leading-relaxed font-normal flex items-start gap-1.5">
+                            <p className="text-slate-800 leading-relaxed font-normal">
                               <span>{seg.originalText}</span>
-                              {mediaSrc && (
-                                <button
-                                  type="button"
-                                  onClick={() => playerRef.current?.seekTo(seg.startSec)}
-                                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-pink-500 hover:text-pink-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
-                                  title={`Phát video từ ${seg.timestamp}`}
-                                >
-                                  <Play className="h-3.5 w-3.5 fill-pink-400" />
-                                </button>
-                              )}
                             </p>
                           ) : (
                             <>
                               {langTab !== 'vietnamese_only' && (
-                                <p className="text-slate-800 leading-relaxed font-normal flex items-start gap-1.5">
+                                <p className="text-slate-800 leading-relaxed font-normal">
                                   <span>{seg.originalText}</span>
-                                  {mediaSrc && (
-                                    <button
-                                      type="button"
-                                      onClick={() => playerRef.current?.seekTo(seg.startSec)}
-                                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-pink-500 hover:text-pink-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
-                                      title={`Phát video từ ${seg.timestamp}`}
-                                    >
-                                      <Play className="h-3.5 w-3.5 fill-pink-400" />
-                                    </button>
-                                  )}
                                 </p>
                               )}
                               {langTab !== 'chinese_only' && (
@@ -700,7 +679,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                       className="flex flex-col sm:grid sm:grid-cols-12 p-3 sm:px-6 gap-2 sm:gap-3 items-start hover:bg-[#FFF9FB] transition-colors"
                     >
                       <div className="sm:col-span-2 shrink-0">
-                        {mediaSrc ? (
+                        {canShowMediaPlayer ? (
                           <button
                             type="button"
                             onClick={() => playerRef.current?.seekTo(seg.startSec)}
@@ -711,8 +690,9 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                             <span>{seg.timestamp}</span>
                           </button>
                         ) : (
-                          <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-100 inline-block">
-                            {seg.timestamp}
+                          <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50/90 px-2.5 py-1 rounded-lg border border-purple-100 inline-flex items-center gap-1 shadow-2xs">
+                            <Clock className="h-3 w-3 text-purple-500" />
+                            <span>{seg.timestamp}</span>
                           </span>
                         )}
                       </div>
@@ -764,7 +744,7 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                     >
                       {/* Timestamp */}
                       <div className="sm:col-span-2 shrink-0">
-                        {mediaSrc ? (
+                        {canShowMediaPlayer ? (
                           <button
                             type="button"
                             onClick={() => playerRef.current?.seekTo(seg.startSec)}
@@ -775,8 +755,9 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                             <span>{seg.timestamp}</span>
                           </button>
                         ) : (
-                          <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50 px-2 py-0.5 rounded-lg border border-purple-100 inline-block">
-                            {seg.timestamp}
+                          <span className="font-mono text-xs font-bold text-purple-800 bg-purple-50/90 px-2.5 py-1 rounded-lg border border-purple-100 inline-flex items-center gap-1 shadow-2xs">
+                            <Clock className="h-3 w-3 text-purple-500" />
+                            <span>{seg.timestamp}</span>
                           </span>
                         )}
                       </div>

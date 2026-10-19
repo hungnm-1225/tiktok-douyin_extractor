@@ -36,6 +36,7 @@ export interface ExtractionResult {
   sourceLanguageName: string; // e.g. "Tiếng Việt", "Tiếng Trung (Douyin)"
   isVietnamese: boolean;
   onlyVietnamese?: boolean;
+  isFreshExtraction?: boolean;
   cleanedUpTempFiles?: boolean;
   modelUsed?: string;
 }

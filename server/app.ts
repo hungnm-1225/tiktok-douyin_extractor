@@ -223,19 +223,12 @@ app.post('/api/extract', async (req, res) => {
       cleanupLocalTempFile(tempAiAudioPath);
     }
 
-    // Attach direct download & stream URL for frontend custom player and download button (points to full original MP4)
-    if (downloaded.filePath && fs.existsSync(downloaded.filePath)) {
-      const fileName = path.basename(downloaded.filePath);
-      result.videoMetadata.downloadUrl = `/api/download-media?file=${encodeURIComponent(fileName)}`;
-      result.videoMetadata.streamUrl = `/api/stream-media?file=${encodeURIComponent(fileName)}`;
-    }
-
-    console.log(`[API /api/extract] Script extraction finished successfully!`);
-
-    // Schedule cleanup after 60 minutes so user can download the video
-    setTimeout(() => {
+    console.log(`[API /api/extract] Script extraction finished successfully! Cleaning up media immediately...`);
+    // Delete video/audio immediately after script extraction to keep website and server lightweight
+    if (localTempPath) {
       cleanupLocalTempFile(localTempPath);
-    }, 60 * 60 * 1000);
+      localTempPath = undefined;
+    }
 
     res.json({
       success: true,

@@ -35,6 +35,7 @@ interface CustomMediaPlayerProps {
   coverImage?: string;
   mimeType?: string;
   mediaType?: 'video' | 'audio';
+  onError?: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -45,7 +46,7 @@ function formatTime(seconds: number): string {
 }
 
 export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPlayerProps>(
-  ({ src, title, platform, duration: initialDuration, coverImage, mimeType, mediaType }, ref) => {
+  ({ src, title, platform, duration: initialDuration, coverImage, mimeType, mediaType, onError }, ref) => {
     const mediaRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const progressRef = useRef<HTMLDivElement>(null);
@@ -214,7 +215,7 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
           /* DEDICATED CUTE PASTEL AUDIO PLAYER (NO BLACK SCREEN)            */
           /* ============================================================== */
           <div className="p-4 sm:p-5 bg-gradient-to-r from-pink-50/90 via-purple-50/80 to-indigo-50/80 space-y-3.5">
-            <audio ref={mediaRef as any} src={src} preload="metadata" />
+            <audio ref={mediaRef as any} src={src} preload="metadata" onError={onError} />
 
             {/* Audio Header Row */}
             <div className="flex items-center justify-between gap-3">
@@ -367,6 +368,7 @@ export const CustomMediaPlayer = forwardRef<CustomMediaPlayerRef, CustomMediaPla
                 poster={coverImage}
                 preload="metadata"
                 playsInline
+                onError={onError}
                 className="w-full h-full max-h-[480px] object-contain mx-auto"
               />
 

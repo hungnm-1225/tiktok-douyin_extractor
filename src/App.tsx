@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { InputSection, isValidMediaUrl } from './components/InputSection';
 import { ResultViewer } from './components/ResultViewer';
@@ -139,6 +139,31 @@ export default function App() {
   const [onlyVietnamese, setOnlyVietnamese] = useState<boolean>(false);
   const [errorState, setErrorState] = useState<AppErrorState | null>(null);
 
+  // Active object URL ref for memory cleanup
+  const activeStreamUrlRef = useRef<string | null>(null);
+
+  // Revoke active media URL to completely free browser memory and audio/video resources
+  const revokeActiveMedia = () => {
+    if (activeStreamUrlRef.current) {
+      try {
+        if (activeStreamUrlRef.current.startsWith('blob:')) {
+          URL.revokeObjectURL(activeStreamUrlRef.current);
+          console.log('[Media Lifecycle] Revoked previous media blob URL:', activeStreamUrlRef.current);
+        }
+      } catch (e) {
+        console.warn('[Media Lifecycle Error]:', e);
+      }
+      activeStreamUrlRef.current = null;
+    }
+  };
+
+  // Clean up object URLs on component unmount
+  useEffect(() => {
+    return () => {
+      revokeActiveMedia();
+    };
+  }, []);
+
   // Load history & samples from LocalStorage / API
   useEffect(() => {
     try {
@@ -168,10 +193,12 @@ export default function App() {
 
   const handleSelectSample = (sample: SampleVideoItem) => {
     if (sample.sampleResult) {
+      revokeActiveMedia();
       const resultData = {
         ...sample.sampleResult,
         id: `ext_sample_${Date.now()}`,
         createdAt: Date.now(),
+        isFreshExtraction: false,
       } as ExtractionResult;
       setCurrentResult(resultData);
       saveToHistory(resultData);
@@ -186,10 +213,20 @@ export default function App() {
 
   const saveToHistory = (newResult: ExtractionResult) => {
     setHistory((prev) => {
+      // LOẠI BỎ streamUrl khi lưu vào Lịch sử, đánh dấu isFreshExtraction = false để khi truy cập lại không có media player
+      const historyItem: ExtractionResult = {
+        ...newResult,
+        isFreshExtraction: false,
+        videoMetadata: {
+          ...newResult.videoMetadata,
+          streamUrl: undefined,
+          downloadUrl: undefined,
+        },
+      };
       const filtered = prev.filter(
         (item) => item.id !== newResult.id && item.videoMetadata.title !== newResult.videoMetadata.title
       );
-      const updated = [newResult, ...filtered].slice(0, 5);
+      const updated = [historyItem, ...filtered].slice(0, 5);
       try {
         localStorage.setItem(LOCAL_STORAGE_HISTORY_KEY, JSON.stringify(updated));
       } catch (e) {
@@ -232,6 +269,8 @@ export default function App() {
       return;
     }
 
+    // Clean up previous video/audio before starting a new extraction
+    revokeActiveMedia();
     setIsLoading(true);
     setErrorState(null);
 
@@ -261,6 +300,7 @@ export default function App() {
       }
 
       data.data.onlyVietnamese = onlyVietnamese;
+      data.data.isFreshExtraction = true;
       setCurrentResult(data.data);
       saveToHistory(data.data);
 
@@ -288,6 +328,8 @@ export default function App() {
   const handleUploadFile = async (file: File) => {
     if (!file) return;
 
+    // Clean up previous video/audio before starting a new upload
+    revokeActiveMedia();
     setIsLoading(true);
     setErrorState(null);
 
@@ -328,8 +370,13 @@ export default function App() {
         result.data.onlyVietnamese = onlyVietnamese;
         result.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
         result.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+
+        // Keep media ONLY at the fresh extraction moment for verification
         try {
-          result.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+          const objectUrl = URL.createObjectURL(file);
+          activeStreamUrlRef.current = objectUrl;
+          result.data.videoMetadata.streamUrl = objectUrl;
+          result.data.isFreshExtraction = true;
         } catch {}
 
         setCurrentResult(result.data);
@@ -390,8 +437,13 @@ export default function App() {
           data.data.onlyVietnamese = onlyVietnamese;
           data.data.videoMetadata.mimeType = file.type || (isAudio ? 'audio/mp3' : 'video/mp4');
           data.data.videoMetadata.mediaType = isAudio ? 'audio' : 'video';
+
+          // Keep media ONLY at the fresh extraction moment for verification
           try {
-            data.data.videoMetadata.streamUrl = URL.createObjectURL(file);
+            const objectUrl = URL.createObjectURL(file);
+            activeStreamUrlRef.current = objectUrl;
+            data.data.videoMetadata.streamUrl = objectUrl;
+            data.data.isFreshExtraction = true;
           } catch {}
 
           setCurrentResult(data.data);
@@ -517,6 +569,8 @@ export default function App() {
           <ResultViewer
             result={currentResult}
             onReset={() => {
+              // Immediately release video/audio when user returns to home
+              revokeActiveMedia();
               setCurrentResult(null);
               setUrl('');
             }}
@@ -542,7 +596,19 @@ export default function App() {
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         history={history}
-        onSelectHistoryItem={(item) => setCurrentResult(item)}
+        onSelectHistoryItem={(item) => {
+          // Immediately revoke active media and strip streamUrl so historical review doesn't show black screen
+          revokeActiveMedia();
+          setCurrentResult({
+            ...item,
+            isFreshExtraction: false,
+            videoMetadata: {
+              ...item.videoMetadata,
+              streamUrl: undefined,
+              downloadUrl: undefined,
+            },
+          });
+        }}
         onClearHistory={handleClearHistory}
         onDeleteItem={handleDeleteHistoryItem}
       />
