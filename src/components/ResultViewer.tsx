@@ -18,7 +18,8 @@ import {
   Volume2,
   Play,
   Eye,
-  EyeOff
+  EyeOff,
+  Film
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { ExtractionResult, ScriptSegment } from '../types';
@@ -474,6 +475,49 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
                       <div className="text-[11px] text-slate-400">Dành cho CapCut, Premiere, DaVinci</div>
                     </div>
                   </button>
+
+                  {/* Option 4: Download Media (Video/Audio) */}
+                  {(() => {
+                    const dlUrl = result.videoMetadata?.downloadUrl || result.videoMetadata?.streamUrl;
+                    if (!dlUrl) return null;
+                    const isAudio = result.videoMetadata?.mediaType === 'audio';
+                    const platform = result.videoMetadata?.platform;
+                    const safeTitle = (result.videoMetadata?.title || 'media')
+                      .replace(/[^\w\s\u00C0-\u024F\u1E00-\u1EFF\u4E00-\u9FFF-]/g, '')
+                      .trim()
+                      .replace(/\s+/g, '_')
+                      .substring(0, 40);
+                    const ext = isAudio ? 'mp3' : 'mp4';
+                    const fileName = `${platform || 'media'}_${safeTitle}.${ext}`;
+                    return (
+                      <>
+                        <div className="border-t border-pink-100/80 my-1" />
+                        <a
+                          href={dlUrl}
+                          download={fileName}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => {
+                            setIsDownloadDropdownOpen(false);
+                            triggerConfetti();
+                          }}
+                          className="w-full flex items-start gap-3 p-2.5 rounded-xl hover:bg-pink-50 text-left transition-colors cursor-pointer group"
+                        >
+                          <div className="p-2 rounded-lg bg-pink-100 text-pink-700 group-hover:bg-pink-200">
+                            <Film className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-800">
+                              {isAudio ? 'Tải Audio Gốc (.MP3)' : 'Tải Video Gốc (.MP4)'}
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              {isAudio ? 'File âm thanh gốc từ video' : 'Video gốc không watermark'}
+                            </div>
+                          </div>
+                        </a>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>
