@@ -442,7 +442,15 @@ async function downloadViaTikWmApi(
       }
 
       const directPlayUrl = videoData.play || videoData.wmplay || videoData.hdplay;
-      const coverUrl = videoData.cover || videoData.origin_cover;
+      let coverUrl = videoData.cover || videoData.origin_cover;
+      if (coverUrl && coverUrl.startsWith('//')) {
+        coverUrl = 'https:' + coverUrl;
+      }
+      let fullPlayUrl = directPlayUrl || mediaStreamUrl;
+      if (fullPlayUrl && fullPlayUrl.startsWith('//')) {
+        fullPlayUrl = 'https:' + fullPlayUrl;
+      }
+      const proxyStreamUrl = fullPlayUrl ? `/api/proxy-media?url=${encodeURIComponent(fullPlayUrl)}` : undefined;
 
       fs.writeFileSync(targetFilePath, buffer);
       console.log(`[TikWM API] Successfully downloaded ${buffer.length} bytes to ${targetFilePath}`);
@@ -453,8 +461,8 @@ async function downloadViaTikWmApi(
         author,
         duration,
         platform,
-        streamUrl: directPlayUrl || mediaStreamUrl,
-        downloadUrl: directPlayUrl || mediaStreamUrl,
+        streamUrl: proxyStreamUrl || fullPlayUrl,
+        downloadUrl: proxyStreamUrl || fullPlayUrl,
         coverImage: coverUrl,
       };
     } catch (err: any) {
@@ -532,7 +540,15 @@ async function downloadViaDouyinApi(cleanUrl: string, fileId: string): Promise<D
       return null;
     }
 
-    const videoCoverUrl = item.video?.cover?.url_list?.[0];
+    let videoCoverUrl = item.video?.cover?.url_list?.[0];
+    if (videoCoverUrl && videoCoverUrl.startsWith('//')) {
+      videoCoverUrl = 'https:' + videoCoverUrl;
+    }
+    let fullTargetUrl = targetUrl;
+    if (fullTargetUrl && fullTargetUrl.startsWith('//')) {
+      fullTargetUrl = 'https:' + fullTargetUrl;
+    }
+    const proxyStreamUrl = `/api/proxy-media?url=${encodeURIComponent(fullTargetUrl)}`;
 
     fs.writeFileSync(targetFilePath, buffer);
 
@@ -543,8 +559,8 @@ async function downloadViaDouyinApi(cleanUrl: string, fileId: string): Promise<D
       author,
       duration,
       platform: 'douyin',
-      streamUrl: targetUrl,
-      downloadUrl: targetUrl,
+      streamUrl: proxyStreamUrl,
+      downloadUrl: proxyStreamUrl,
       coverImage: videoCoverUrl,
     };
   } catch (err: any) {

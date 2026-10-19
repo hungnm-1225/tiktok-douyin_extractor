@@ -414,11 +414,19 @@ async function downloadViaDouyinRenderData(
         const title = item.desc || item.itemTitle || 'Douyin Video';
         const author = item.authorInfo?.nickname || item.author?.nickname || 'Douyin Creator';
         const duration = Math.round((item.video.duration || 30000) / 1000);
-        const videoCoverUrl = item.video?.cover?.url_list?.[0] || item.video?.origin_cover?.url_list?.[0];
+        let videoCoverUrl = item.video?.cover?.url_list?.[0] || item.video?.origin_cover?.url_list?.[0];
+        if (videoCoverUrl && videoCoverUrl.startsWith('//')) {
+          videoCoverUrl = 'https:' + videoCoverUrl;
+        }
+
         let videoStreamUrl = item.video.playAddr?.[0]?.src || item.video.play_addr?.url_list?.[0];
         if (!videoStreamUrl && Array.isArray(item.video.playApiList)) videoStreamUrl = item.video.playApiList[0];
 
         if (videoStreamUrl) {
+          if (videoStreamUrl.startsWith('//')) {
+            videoStreamUrl = 'https:' + videoStreamUrl;
+          }
+
           const targetFilePath = path.join(tempDir, `${fileId}.mp4`);
           const streamRes = await fetch(videoStreamUrl, {
             headers: { 'User-Agent': ua, 'Referer': 'https://www.douyin.com/' },
@@ -427,6 +435,7 @@ async function downloadViaDouyinRenderData(
             const buffer = Buffer.from(await streamRes.arrayBuffer());
             if (buffer.length > 5000) {
               fs.writeFileSync(targetFilePath, buffer);
+              const proxyStreamUrl = `/api/proxy-media?url=${encodeURIComponent(videoStreamUrl)}`;
               return {
                 filePath: targetFilePath,
                 mimeType: 'video/mp4',
@@ -434,8 +443,8 @@ async function downloadViaDouyinRenderData(
                 author,
                 duration,
                 platform: 'douyin' as const,
-                streamUrl: videoStreamUrl,
-                downloadUrl: videoStreamUrl,
+                streamUrl: proxyStreamUrl,
+                downloadUrl: proxyStreamUrl,
                 coverImage: videoCoverUrl,
               };
             }
@@ -494,7 +503,15 @@ async function downloadViaTikWm(
 
           const mediaStreamUrl = videoData.play || videoData.wmplay || videoData.hdplay || videoData.music;
           const directPlayUrl = videoData.play || videoData.wmplay || videoData.hdplay;
-          const coverUrl = videoData.cover || videoData.origin_cover;
+          let coverUrl = videoData.cover || videoData.origin_cover;
+          if (coverUrl && coverUrl.startsWith('//')) {
+            coverUrl = 'https:' + coverUrl;
+          }
+
+          let fullPlayUrl = directPlayUrl || mediaStreamUrl;
+          if (fullPlayUrl && fullPlayUrl.startsWith('//')) {
+            fullPlayUrl = 'https:' + fullPlayUrl;
+          }
 
           if (mediaStreamUrl) {
             const isVideo = Boolean(videoData.play || videoData.wmplay || videoData.hdplay || (!videoData.music && mediaStreamUrl));
@@ -514,6 +531,7 @@ async function downloadViaTikWm(
               const buffer = Buffer.from(await streamRes.arrayBuffer());
               if (buffer.length > 1000) {
                 fs.writeFileSync(targetFilePath, buffer);
+                const proxyStreamUrl = fullPlayUrl ? `/api/proxy-media?url=${encodeURIComponent(fullPlayUrl)}` : undefined;
                 return {
                   filePath: targetFilePath,
                   mimeType,
@@ -521,8 +539,8 @@ async function downloadViaTikWm(
                   author,
                   duration,
                   platform,
-                  streamUrl: directPlayUrl || mediaStreamUrl,
-                  downloadUrl: directPlayUrl || mediaStreamUrl,
+                  streamUrl: proxyStreamUrl || fullPlayUrl,
+                  downloadUrl: proxyStreamUrl || fullPlayUrl,
                   coverImage: coverUrl,
                 };
               }
@@ -580,8 +598,15 @@ async function downloadMedia(rawUrl: string, fileId: string) {
             const duration = Math.round((item.duration || 30000) / 1000);
             const videoUrl = item.video?.play_addr?.url_list?.[0]?.replace('playwm', 'play');
             const audioUrl = item.music?.play_url?.uri || item.music?.play_url?.url_list?.[0];
-            const videoCoverUrl = item.video?.cover?.url_list?.[0];
             const targetUrl = videoUrl || audioUrl;
+            let videoCoverUrl = item.video?.cover?.url_list?.[0];
+            if (videoCoverUrl && videoCoverUrl.startsWith('//')) {
+              videoCoverUrl = 'https:' + videoCoverUrl;
+            }
+            let fullTargetUrl = targetUrl;
+            if (fullTargetUrl && fullTargetUrl.startsWith('//')) {
+              fullTargetUrl = 'https:' + fullTargetUrl;
+            }
 
             if (targetUrl) {
               const isVideo = Boolean(videoUrl);
@@ -600,6 +625,7 @@ async function downloadMedia(rawUrl: string, fileId: string) {
                 const buffer = Buffer.from(await mediaRes.arrayBuffer());
                 if (buffer.length > 1000) {
                   fs.writeFileSync(targetFilePath, buffer);
+                  const proxyStreamUrl = `/api/proxy-media?url=${encodeURIComponent(fullTargetUrl)}`;
                   return {
                     filePath: targetFilePath,
                     mimeType,
@@ -607,8 +633,8 @@ async function downloadMedia(rawUrl: string, fileId: string) {
                     author,
                     duration,
                     platform,
-                    streamUrl: targetUrl,
-                    downloadUrl: targetUrl,
+                    streamUrl: proxyStreamUrl,
+                    downloadUrl: proxyStreamUrl,
                     coverImage: videoCoverUrl,
                   };
                 }

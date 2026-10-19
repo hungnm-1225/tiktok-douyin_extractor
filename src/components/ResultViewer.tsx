@@ -112,12 +112,16 @@ export const ResultViewer: React.FC<ResultViewerProps> = ({ result, onReset }) =
   // 2. Có URL stream media hợp lệ
   // 3. Không có lỗi khi tải media
   const isFreshExtraction = Boolean(result.isFreshExtraction);
-  const mediaSrc = result.videoMetadata?.streamUrl || result.videoMetadata?.downloadUrl;
+  const rawMediaSrc = result.videoMetadata?.streamUrl || result.videoMetadata?.downloadUrl;
+  const mediaSrc = rawMediaSrc?.startsWith('//') ? `https:${rawMediaSrc}` : rawMediaSrc;
   const canShowMediaPlayer = Boolean(
     isFreshExtraction &&
     mediaSrc &&
     !mediaLoadError &&
-    (mediaSrc.startsWith('blob:') || mediaSrc.startsWith('http://') || mediaSrc.startsWith('https://'))
+    (mediaSrc.startsWith('blob:') ||
+     mediaSrc.startsWith('http://') ||
+     mediaSrc.startsWith('https://') ||
+     mediaSrc.startsWith('/'))
   );
 
   const isVietnamese = result.isVietnamese;

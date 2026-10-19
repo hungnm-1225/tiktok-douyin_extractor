@@ -470,5 +470,65 @@ app.post('/api/process-blob', async (req, res) => {
   }
 });
 
+// API 6: Proxy media streaming for Douyin & TikTok to bypass CORS and Referer restrictions
+app.get('/api/proxy-media', async (req, res) => {
+  const rawUrl = req.query.url as string;
+  if (!rawUrl) {
+    return res.status(400).send('Missing url parameter');
+  }
+
+  try {
+    let targetUrl = decodeURIComponent(rawUrl).trim();
+    if (targetUrl.startsWith('//')) {
+      targetUrl = 'https:' + targetUrl;
+    }
+
+    const range = req.headers.range;
+    const isDouyin = targetUrl.includes('douyin') || targetUrl.includes('snssdk.com');
+
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'Referer': isDouyin ? 'https://www.douyin.com/' : 'https://www.tiktok.com/',
+      'Accept': '*/*',
+    };
+
+    if (range) {
+      headers['Range'] = range;
+    }
+
+    const upstreamRes = await fetch(targetUrl, {
+      method: 'GET',
+      headers,
+    });
+
+    res.status(upstreamRes.status);
+
+    const contentType = upstreamRes.headers.get('content-type') || 'video/mp4';
+    const contentLength = upstreamRes.headers.get('content-length');
+    const contentRange = upstreamRes.headers.get('content-range');
+    const acceptRanges = upstreamRes.headers.get('accept-ranges') || 'bytes';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', acceptRanges);
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    res.setHeader('Cache-Control', 'public, max-age=7200');
+
+    if (!upstreamRes.body) {
+      return res.end();
+    }
+
+    const { Readable } = await import('stream');
+    const nodeStream = Readable.fromWeb(upstreamRes.body as any);
+    nodeStream.pipe(res);
+  } catch (err: any) {
+    console.error('[Proxy Media Server Error]:', err);
+    if (!res.headersSent) {
+      res.status(500).send(err.message || 'Stream proxy error');
+    }
+  }
+});
+
 export default app;
 export { app };
