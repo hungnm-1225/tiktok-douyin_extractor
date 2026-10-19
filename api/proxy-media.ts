@@ -30,12 +30,25 @@ export default async function handler(req: any, res: any) {
     }
 
     const range = req.headers.range;
-    const isDouyin = targetUrl.includes('douyin') || targetUrl.includes('snssdk.com');
+    const platformQuery = ((req.query.platform as string) || '').toLowerCase();
+    const isDouyin =
+      platformQuery === 'douyin' ||
+      targetUrl.includes('douyin') ||
+      targetUrl.includes('zjcdn.com') ||
+      targetUrl.includes('douyinvod.com') ||
+      targetUrl.includes('snssdk.com') ||
+      targetUrl.includes('bytegoofy.com') ||
+      targetUrl.includes('bytedance.com') ||
+      targetUrl.includes('pstatp.com') ||
+      targetUrl.includes('amemv.com') ||
+      targetUrl.includes('ixigua.com') ||
+      targetUrl.includes('toutiao');
 
     const headers: Record<string, string> = {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       'Referer': isDouyin ? 'https://www.douyin.com/' : 'https://www.tiktok.com/',
+      'Origin': isDouyin ? 'https://www.douyin.com' : 'https://www.tiktok.com',
       'Accept': '*/*',
     };
 
