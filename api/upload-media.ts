@@ -180,6 +180,8 @@ export default async function handler(request: any, response: any) {
         request,
         onBeforeGenerateToken: async (pathname: string) => {
           return {
+            allowOverwrite: true,
+            addRandomSuffix: false,
             maximumSizeInBytes: 500 * 1024 * 1024, // 500MB
             tokenPayload: JSON.stringify({ pathname }),
           };

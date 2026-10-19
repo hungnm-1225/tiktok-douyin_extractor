@@ -299,11 +299,9 @@ export default function App() {
     // Strategy 1: Vercel Blob Client Upload (Direct from Browser to Vercel Blob, up to 500MB, 0 Payload!)
     try {
       console.log('[Vercel Blob] Uploading directly from browser...');
-      const ext = file.name.split('.').pop() || (isAudio ? 'mp3' : 'mp4');
-      const cleanBase = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'upload';
-      const uniquePathname = `${cleanBase}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${ext}`;
+      const targetPathname = file.name || (isAudio ? 'audio.mp3' : 'video.mp4');
 
-      const newBlob = await upload(uniquePathname, file, {
+      const newBlob = await upload(targetPathname, file, {
         access: 'public',
         handleUploadUrl: '/api/upload-media',
       });

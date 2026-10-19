@@ -283,6 +283,39 @@ app.post('/api/extract', async (req, res) => {
 
 // API 4: Direct upload audio/video file for transcription
 app.post('/api/upload-media', async (req, res) => {
+  // Branch 1: Vercel Blob client token request
+  if (req.body?.type === 'blob.generate-client-token' || req.body?.type?.startsWith('blob.')) {
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      return res.status(400).json({
+        error: 'Chưa kết nối BLOB_READ_WRITE_TOKEN. Vui lòng cấu hình biến môi trường BLOB_READ_WRITE_TOKEN.',
+      });
+    }
+
+    try {
+      const { handleUpload } = await import('@vercel/blob/client');
+      const jsonResponse = await handleUpload({
+        body: req.body,
+        request: req,
+        onBeforeGenerateToken: async (pathname: string) => {
+          return {
+            allowOverwrite: true,
+            addRandomSuffix: false,
+            maximumSizeInBytes: 500 * 1024 * 1024, // 500MB
+            tokenPayload: JSON.stringify({ pathname }),
+          };
+        },
+        onUploadCompleted: async ({ blob }) => {
+          console.log('[Vercel Blob] Upload completed:', blob.url);
+        },
+      });
+
+      return res.status(200).json(jsonResponse);
+    } catch (error: any) {
+      console.error('[Vercel Blob HandleUpload Error]:', error);
+      return res.status(400).json({ error: error.message });
+    }
+  }
+
   let localTempPath: string | undefined;
 
   try {
