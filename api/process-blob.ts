@@ -183,6 +183,80 @@ const EXTRACTION_SCHEMA = {
   ],
 };
 
+async function downloadBlobBuffer(blobUrl: string): Promise<Buffer> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  let lastError: any = null;
+
+  // Attempt 1: Direct fetch with Bearer token & retry (handles CDN replication delay after overwrite)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(`[Vercel Blob Download] Attempt ${attempt} fetching: ${blobUrl}`);
+      const headers: Record<string, string> = {
+        'Cache-Control': 'no-cache, no-store',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const res = await fetch(blobUrl, { headers, cache: 'no-store' });
+      if (res.ok) {
+        const arrayBuf = await res.arrayBuffer();
+        if (arrayBuf.byteLength > 0) {
+          console.log(`[Vercel Blob Download] Success on attempt ${attempt} (${(arrayBuf.byteLength / 1024 / 1024).toFixed(2)} MB)`);
+          return Buffer.from(arrayBuf);
+        }
+      }
+      lastError = new Error(`Direct fetch HTTP ${res.status} (${res.statusText})`);
+      console.warn(`[Vercel Blob Download] Attempt ${attempt} failed: ${lastError.message}`);
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[Vercel Blob Download] Attempt ${attempt} network error:`, err.message);
+    }
+
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+    }
+  }
+
+  // Attempt 2: Use official @vercel/blob get() with public access
+  try {
+    console.log(`[Vercel Blob Download] Fallback: get() with public access...`);
+    const blobResult = await get(blobUrl, {
+      access: 'public',
+      useCache: false,
+      token,
+    });
+    if (blobResult?.stream) {
+      const streamBuffer = await new Response(blobResult.stream).arrayBuffer();
+      if (streamBuffer.byteLength > 0) {
+        return Buffer.from(streamBuffer);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[Vercel Blob Download] get(public) failed:`, err.message);
+  }
+
+  // Attempt 3: Use official @vercel/blob get() with private access
+  try {
+    console.log(`[Vercel Blob Download] Fallback: get() with private access...`);
+    const blobResult = await get(blobUrl, {
+      access: 'private',
+      useCache: false,
+      token,
+    });
+    if (blobResult?.stream) {
+      const streamBuffer = await new Response(blobResult.stream).arrayBuffer();
+      if (streamBuffer.byteLength > 0) {
+        return Buffer.from(streamBuffer);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[Vercel Blob Download] get(private) failed:`, err.message);
+  }
+
+  throw new Error(`Không thể tải tệp từ kho lưu trữ Blob: ${lastError?.message || 'Tệp chưa sẵn sàng hoặc không thể truy cập.'}`);
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -231,41 +305,58 @@ export default async function handler(req: any, res: any) {
     httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
   });
 
+  let uploadedCloudFile: any = null;
+
   try {
     console.log(`[Vercel Blob Process] Fetching blob content: ${blobUrl}`);
-    let buffer: Buffer;
-
-    try {
-      const fileRes = await fetch(blobUrl);
-      if (fileRes.ok) {
-        buffer = Buffer.from(await fileRes.arrayBuffer());
-      } else {
-        throw new Error(`Public fetch returned ${fileRes.status}`);
-      }
-    } catch {
-      // Fallback for Private Blob: use official get() with read-write token
-      console.log(`[Vercel Blob Process] Public fetch restricted, reading private blob with token...`);
-      const blobResult = await get(blobUrl, {
-        access: 'private',
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
-
-      if (!blobResult || !blobResult.stream) {
-        throw new Error('Không thể tải tệp từ kho lưu trữ Blob.');
-      }
-
-      const streamBuffer = await new Response(blobResult.stream).arrayBuffer();
-      buffer = Buffer.from(streamBuffer);
-    }
-
+    const buffer = await downloadBlobBuffer(blobUrl);
     const safeMimeType = mimeType || 'video/mp4';
+    const fileSizeInMB = buffer.length / (1024 * 1024);
 
-    const mediaPart = {
-      inlineData: {
-        mimeType: safeMimeType,
-        data: buffer.toString('base64'),
-      },
-    };
+    let mediaPart: any;
+    if (fileSizeInMB <= 20) {
+      console.log(`[Gemini Pipeline] Buffer <= 20MB (${fileSizeInMB.toFixed(2)} MB), using inlineData`);
+      mediaPart = {
+        inlineData: {
+          mimeType: safeMimeType,
+          data: buffer.toString('base64'),
+        },
+      };
+    } else {
+      console.log(`[Gemini Pipeline] Buffer > 20MB (${fileSizeInMB.toFixed(2)} MB), uploading to Gemini Cloud File API...`);
+      const fs = await import('fs');
+      const path = await import('path');
+      const os = await import('os');
+      const ext = fileName?.split('.').pop() || (safeMimeType.includes('audio') ? 'mp3' : 'mp4');
+      const tempFilePath = path.join(os.tmpdir(), `blob_gemini_${Date.now()}.${ext}`);
+      fs.writeFileSync(tempFilePath, buffer);
+
+      try {
+        uploadedCloudFile = await ai.files.upload({
+          file: tempFilePath,
+        });
+
+        let fileState = uploadedCloudFile.state;
+        let attempts = 0;
+        while (fileState === 'PROCESSING' && attempts < 10) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const checked = await ai.files.get({ name: uploadedCloudFile.name });
+          fileState = checked.state;
+          attempts++;
+        }
+
+        mediaPart = {
+          fileData: {
+            fileUri: uploadedCloudFile.uri,
+            mimeType: uploadedCloudFile.mimeType || safeMimeType,
+          },
+        };
+      } finally {
+        try {
+          fs.unlinkSync(tempFilePath);
+        } catch {}
+      }
+    }
 
     let activeModel = CANDIDATE_MODELS[0];
     let geminiResponse: any = null;
@@ -357,6 +448,16 @@ export default async function handler(req: any, res: any) {
       error: error.message || 'Lỗi xử lý file.',
     });
   } finally {
+    // Clean up Gemini cloud file if created
+    if (uploadedCloudFile?.name) {
+      try {
+        await ai.files.delete({ name: uploadedCloudFile.name });
+        console.log(`[Gemini Cleanup] Deleted cloud file: ${uploadedCloudFile.name}`);
+      } catch (err) {
+        console.warn('[Gemini Cleanup Warning]:', err);
+      }
+    }
+
     // Automatically delete file from Vercel Blob immediately to keep storage 100% free & clean!
     try {
       if (blobUrl) {

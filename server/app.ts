@@ -416,7 +416,11 @@ app.post('/api/process-blob', async (req, res) => {
 
   try {
     console.log(`[API /api/process-blob] Fetching blob stream: ${blobUrl}`);
-    const fileRes = await fetch(blobUrl);
+    const headers: Record<string, string> = { 'Cache-Control': 'no-cache, no-store' };
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`;
+    }
+    const fileRes = await fetch(blobUrl, { headers, cache: 'no-store' });
     if (!fileRes.ok) {
       throw new Error(`Không thể đọc file từ Blob storage (${fileRes.status})`);
     }
